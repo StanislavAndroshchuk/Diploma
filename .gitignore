@@ -1,38 +1,11 @@
-
-__pycache__/genotype.cpython-311.pyc
-__pycache__/innovation.cpython-311.pyc
-__pycache__/phenotype.cpython-311.pyc
-__pycache__/visualizer.cpython-311.pyc
+__pycache__/
 venv/
 .vscode/settings.json
-project/visualization/__pycache__/__init__.cpython-311.pyc
-project/visualization/__pycache__/gui.cpython-311.pyc
-project/visualization/__pycache__/network_visualizer.cpython-311.pyc
-project/neat/__pycache__/__init__.cpython-311.pyc
-project/neat/__pycache__/genome.cpython-311.pyc
-project/neat/__pycache__/innovation.cpython-311.pyc
-project/neat/__pycache__/neat_algorithm.cpython-311.pyc
-project/neat/__pycache__/nn.cpython-311.pyc
-project/neat/__pycache__/species.cpython-311.pyc
-project/environment/__pycache__/__init__.cpython-311.pyc
-project/environment/__pycache__/agent.cpython-311.pyc
-project/environment/__pycache__/maze.cpython-311.pyc
-project/__pycache__/config.cpython-311.pyc
-not_project/aa/__pycache__/connection.cpython-311.pyc
-not_project/aa/__pycache__/genome.cpython-311.pyc
-not_project/aa/__pycache__/node.cpython-311.pyc
-not_project/aa/__pycache__/visualization.cpython-311.pyc
-not_project/temp1/__pycache__/genotype.cpython-311.pyc
-not_project/temp1/__pycache__/innovation.cpython-311.pyc
-not_project/temp1/__pycache__/phenotype.cpython-311.pyc
-not_project/temp1/__pycache__/visualizer.cpython-311.pyc
-not_project/visualiser/__pycache__/circle_manager.cpython-311.pyc
-not_project/visualiser/__pycache__/key_handlers.cpython-311.pyc
-not_project/visualiser/__pycache__/ui_components.cpython-311.pyc
-not_project/visualiser/__pycache__/utils.cpython-311.pyc
-project/saves/v1/500 gen.neat_save
-project/saves/v1/600 gen.neat_save
-project/saves/v1/good.neat_save
-project/saves/v1/not good.neat_save
-project/saves/v1/save1.neat_save
-project/saves/v1/very good.neat_save
+project/visualization/__pycache__/
+project/neat/__pycache__/
+project/environment/__pycache__/
+project/__pycache__/
+not_project/aa/__pycache__/
+not_project/temp1/__pycache__/
+not_project/visualiser/__pycache__/
+project/saves/v1/
