@@ -1,5 +1,9 @@
 __pycache__/
 venv/
+venv/Include/
+venv/Lib/
+venv/Scripts/
+venv/pyvenv.cfg
 .vscode/settings.json
 project/visualization/__pycache__/
 project/neat/__pycache__/
