@@ -3,7 +3,7 @@
 import random
 import math
 import copy # Імпортуємо модуль copy для глибокого копіювання
-from typing import Optional, Dict, List, Tuple # Додаємо типізацію
+from typing import Optional, Dict, List, Tuple, Any# Додаємо типізацію
 
 # Імпортуємо InnovationManager (переконайтесь, що він доступний)
 try:
@@ -73,6 +73,24 @@ class NodeGene:
         self.output_value: float = 0.0
         self._input_sum: float = 0.0
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'type': self.type,
+            'bias': self.bias,
+            'activation_function_name': self.activation_function_name
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'NodeGene':
+        node = cls(
+            node_id=data['id'],
+            node_type=data['type'],
+            bias=data['bias'],
+            activation_func=data['activation_function_name']
+        )
+        return node
+    
     def __repr__(self) -> str:
         """Рядкове представлення гена вузла."""
         return (f"NodeGene(id={self.id}, type={self.type}, "
@@ -91,6 +109,25 @@ class ConnectionGene:
         self.enabled = bool(enabled)
         self.innovation = int(innovation_num) # Історичний маркер
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'in_node_id': self.in_node_id,
+            'out_node_id': self.out_node_id,
+            'weight': self.weight,
+            'enabled': self.enabled,
+            'innovation': self.innovation
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ConnectionGene':
+        return cls(
+            in_node_id=data['in_node_id'],
+            out_node_id=data['out_node_id'],
+            weight=data['weight'],
+            enabled=data['enabled'],
+            innovation_num=data['innovation']
+        )
+    
     def __repr__(self) -> str:
         """Рядкове представлення гена з'єднання."""
         status = "Enabled" if self.enabled else "Disabled"
@@ -102,13 +139,13 @@ class ConnectionGene:
         return ConnectionGene(self.in_node_id, self.out_node_id, self.weight, self.enabled, self.innovation)
 
 # --- Клас Геному ---
-
+# Така хуйня
 class Genome:
     """
     Представляє повний геном (нейронну мережу).
     Містить вузли та з'єднання, а також методи для мутації та кросоверу.
     """
-    def __init__(self, genome_id: int, num_inputs: int, num_outputs: int, config: dict, innovation_manager: InnovationManager): # Додано innovation_manager
+    def __init__(self, genome_id: int, num_inputs: int, num_outputs: int, config: dict, innovation_manager: InnovationManager, _is_loading_from_dict: bool = False): # Додано innovation_manager
         """
         Ініціалізує геном з мінімальною структурою.
         """
@@ -122,57 +159,104 @@ class Genome:
         self.fitness: float = 0.0       # Нескоригована пристосованість
         self.adjusted_fitness: float = 0.0 # Пристосованість після fitness sharing
         self.species_id: Optional[int] = None   # ID виду
+        if not _is_loading_from_dict:
+            node_counter = 0 # Лічильник для початкових ID
 
-        node_counter = 0 # Лічильник для початкових ID
+            # Створюємо вхідні вузли
+            for _ in range(num_inputs):
+                node_id = node_counter
+                # Вхідні вузли не мають біасу і використовують лінійну активацію
+                self.nodes[node_id] = NodeGene(node_id, "INPUT", bias=0.0, activation_func='linear')
+                self._input_node_ids.append(node_id)
+                node_counter += 1
 
-        # Створюємо вхідні вузли
-        for _ in range(num_inputs):
-            node_id = node_counter
-            # Вхідні вузли не мають біасу і використовують лінійну активацію
-            self.nodes[node_id] = NodeGene(node_id, "INPUT", bias=0.0, activation_func='linear')
-            self._input_node_ids.append(node_id)
+            # Створюємо біас-вузол
+            self._bias_node_id = node_counter
+            self.nodes[self._bias_node_id] = NodeGene(self._bias_node_id, "BIAS", bias=0.0, activation_func='linear')
+            if self._bias_node_id is not None : # Додано перевірку, хоча _bias_node_id завжди буде int тут
+                self.nodes[self._bias_node_id].output_value = 1.0 # Вихід біасу завжди 1.0
             node_counter += 1
 
-        # Створюємо біас-вузол
-        self._bias_node_id = node_counter
-        self.nodes[self._bias_node_id] = NodeGene(self._bias_node_id, "BIAS", bias=0.0, activation_func='linear')
-        self.nodes[self._bias_node_id].output_value = 1.0 # Вихід біасу завжди 1.0
-        node_counter += 1
+            # Створюємо вихідні вузли
+            for _ in range(num_outputs):
+                node_id = node_counter
+                self.nodes[node_id] = NodeGene(node_id, "OUTPUT", activation_func=DEFAULT_ACTIVATION)
+                self._output_node_ids.append(node_id)
+                node_counter += 1
 
-        # Створюємо вихідні вузли
-        for _ in range(num_outputs):
-            node_id = node_counter
-            self.nodes[node_id] = NodeGene(node_id, "OUTPUT", activation_func=DEFAULT_ACTIVATION)
-            self._output_node_ids.append(node_id)
-            node_counter += 1
+            # Ініціалізація з'єднань: всі входи + біас до всіх виходів
+            num_initial_connections = self.config.get('INITIAL_CONNECTIONS', 10)
+            all_inputs_ids = self._input_node_ids + ([self._bias_node_id] if self._bias_node_id is not None else [])
+            #innov_num_counter = 0 # Початкові інновації (0, 1, 2, ...)
+            weight_init_range = self.config.get('WEIGHT_INIT_RANGE', 1.0)
 
-        # Ініціалізація з'єднань: всі входи + біас до всіх виходів
-        num_initial_connections = self.config.get('INITIAL_CONNECTIONS', 10)
-        all_inputs_ids = self._input_node_ids + [self._bias_node_id] # Включаємо біас
-        #innov_num_counter = 0 # Початкові інновації (0, 1, 2, ...)
-        weight_init_range = self.config.get('WEIGHT_INIT_RANGE', 1.0)
+            if all_inputs_ids and self._output_node_ids: # Тільки якщо є входи та виходи
+                possible_initial_pairs: List[Tuple[int, int]] = []
+                for in_id in all_inputs_ids:
+                    for out_id in self._output_node_ids:
+                        possible_initial_pairs.append((in_id, out_id))
+                
+                if possible_initial_pairs:
+                    num_to_create = min(num_initial_connections, len(possible_initial_pairs))
+                    chosen_pairs = random.sample(possible_initial_pairs, num_to_create)
+                    for in_id, out_id in chosen_pairs:
+                        weight = random.uniform(-weight_init_range, weight_init_range)
+                        # Використовуємо innovation_manager переданий в конструктор
+                        innov = innovation_manager.get_connection_innovation(in_id, out_id)
+                        self.connections[innov] = ConnectionGene(in_id, out_id, weight, True, innov)
+        # Якщо _is_loading_from_dict, то nodes, connections, etc., будуть заповнені з from_dict
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'fitness': self.fitness,
+            'adjusted_fitness': self.adjusted_fitness,
+            'species_id': self.species_id,
+            'nodes': {str(nid): node.to_dict() for nid, node in self.nodes.items()}, # Ключі словника JSON мають бути рядками
+            'connections': {str(innov): conn.to_dict() for innov, conn in self.connections.items()}, # Ключі словника JSON
+            '_input_node_ids': self._input_node_ids,
+            '_output_node_ids': self._output_node_ids,
+            '_bias_node_id': self._bias_node_id,
+            # config не зберігаємо тут, він глобальний
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], config: dict, innovation_manager: InnovationManager) -> 'Genome':
+        # num_inputs/num_outputs не потрібні, бо вузли відновлюються зі збережених даних
+        genome = cls(
+            genome_id=data['id'], 
+            num_inputs=0, # Не використовується при _is_loading_from_dict=True
+            num_outputs=0, # Не використовується при _is_loading_from_dict=True
+            config=config, 
+            innovation_manager=innovation_manager, # Може бути потрібен для майбутніх операцій
+            _is_loading_from_dict=True
+        )
+        genome.fitness = data.get('fitness', 0.0)
+        genome.adjusted_fitness = data.get('adjusted_fitness', 0.0)
+        genome.species_id = data.get('species_id')
 
-        possible_initial_pairs: List[Tuple[int, int]] = []
-        for in_id in all_inputs_ids:
-             for out_id in self._output_node_ids:
-                 possible_initial_pairs.append((in_id, out_id))
-        num_to_create = min(num_initial_connections, len(possible_initial_pairs))
-        chosen_pairs = random.sample(possible_initial_pairs, num_to_create)
-        for in_id, out_id in chosen_pairs:
-             weight = random.uniform(-weight_init_range, weight_init_range)
-             enabled = True
-             # Використовуємо InnovationManager для отримання номера інновації
-             # Це гарантує унікальність і правильну послідовність на старті
-             innov = innovation_manager.get_connection_innovation(in_id, out_id) # ПРАВИЛЬНО
-             self.connections[innov] = ConnectionGene(in_id, out_id, weight, enabled, innov)
+        genome.nodes = {int(node_id_str): NodeGene.from_dict(node_data)
+                        for node_id_str, node_data in data['nodes'].items()}
+        genome.connections = {int(innov_str): ConnectionGene.from_dict(conn_data)
+                              for innov_str, conn_data in data['connections'].items()}
+        
+        genome._input_node_ids = data.get('_input_node_ids', [])
+        genome._output_node_ids = data.get('_output_node_ids', [])
+        genome._bias_node_id = data.get('_bias_node_id')
+        
+        # Перевірка output_value для BIAS вузла
+        if genome._bias_node_id is not None and genome._bias_node_id in genome.nodes:
+            genome.nodes[genome._bias_node_id].output_value = 1.0
 
+        return genome
     # --- Метод копіювання геному ---
     def copy(self) -> 'Genome':
         """Створює глибоку копію цього геному."""
         # !!! ВАЖЛИВО: При копіюванні innovation_manager НЕ копіюється, використовується той самий конфіг !!!
         # Створюємо новий екземпляр, використовуючи ID та конфіг оригіналу
         # num_inputs/outputs тут не важливі, бо ми перезапишемо списки ID
-        new_genome = Genome(self.id, 0, 0, self.config, InnovationManager())
+        temp_innov_manager = InnovationManager() # Створюємо тимчасовий
+
+        new_genome = Genome(self.id, 0, 0, self.config, temp_innov_manager, _is_loading_from_dict=True)
         new_genome.id = self.id # Відновлюємо ID (або генеруємо новий в neat_algorithm)
         # Копіюємо основні атрибути
         new_genome.fitness = self.fitness
@@ -324,11 +408,15 @@ class Genome:
 
     # --- Метод кросоверу ---
     @staticmethod
-    def crossover(genome1: 'Genome', genome2: 'Genome', g1_is_fitter: bool) -> 'Genome':
+    def crossover(genome1: 'Genome', genome2: 'Genome', g1_is_fitter: bool, 
+                  config_for_child: dict, dummy_innovation_manager_for_child: InnovationManager) -> 'Genome':
         """Виконує кросовер між двома геномами."""
         config = genome1.config # Беремо конфіг від першого батька
         # Створюємо "порожнього" нащадка
-        child = Genome(f"c_{genome1.id}_{genome2.id}", 0, 0, config, InnovationManager())
+        child = Genome(f"c_{genome1.id}_{genome2.id}", 0, 0, 
+                       config_for_child,
+                       dummy_innovation_manager_for_child, # Використовуємо переданий
+                       _is_loading_from_dict=True) 
         child.nodes = {}
         child.connections = {}
         child._input_node_ids = list(genome1._input_node_ids)

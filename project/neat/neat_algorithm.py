@@ -6,7 +6,9 @@ import math
 import copy
 import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed # Додаємо імпорт
-import os # Для os.cpu_count
+import os
+from typing import Any, Dict, List, Optional # Для os.cpu_count
+import json # Додаємо імпорт json
 
 from .genome import Genome
 from .innovation import InnovationManager
@@ -19,14 +21,20 @@ class NeatAlgorithm:
     """
 
     def __init__(self, config: dict, num_inputs: int, num_outputs: int, initial_genome_id_start=0, _is_loading=False):
-        # ... (поточний код __init__)
         self.config = config
         self._genome_id_counter = itertools.count(initial_genome_id_start)
         self.population_size = config.get('POPULATION_SIZE', 150)
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
-        self.species_representatives_prev_gen: dict[int, Genome] = {} # {species_id: representative_genome}
-        self.generation_statistics: list[dict] = [] # Для збереження історії
+        node_id_for_innov_manager = num_inputs + num_outputs + (1 if config.get('USE_BIAS_NODE', True) else 0) 
+        self.innovation_manager = InnovationManager(start_node_id=node_id_for_innov_manager)
+        self.population: List[Genome] = []
+        self.species: List[Species] = []
+        self.species_representatives_prev_gen: Dict[int, Genome] = {} # {species_id: representative_genome}
+        self.generation = 0
+        self.best_genome_overall: Optional[Genome] = None
+        self.generation_statistics: list[dict] = []# Для збереження історії
+
         required_keys = [
             'POPULATION_SIZE', 'COMPATIBILITY_THRESHOLD', 'C1_EXCESS',
             'C2_DISJOINT', 'C3_WEIGHT', 'WEIGHT_MUTATE_RATE',
@@ -38,27 +46,16 @@ class NeatAlgorithm:
         missing_keys = [key for key in required_keys if key not in config]
         if missing_keys:
              raise ValueError(f"Missing required configuration key(s) in config: {', '.join(missing_keys)}")
-        node_id_for_innov_manager = num_inputs + num_outputs + 1 # inputs + outputs + bias
-        # initial_node_id_count = num_inputs + num_outputs + 1
-        initial_innov_count = (num_inputs + 1) * num_outputs
-        self.innovation_manager = InnovationManager(
-            start_node_id=node_id_for_innov_manager,
-            start_innovation_num=0 # Починаємо з 0, Genome.__init__ використає менеджер
-        )
+        
+        # # === ПОВЕРТАЄМО ЛІЧИЛЬНИК ID ===
+        # self._genome_id_counter = itertools.count(0) # Глобальний лічильник ID геномів
+        # # ===============================
 
-        # === ПОВЕРТАЄМО ЛІЧИЛЬНИК ID ===
-        self._genome_id_counter = itertools.count(0) # Глобальний лічильник ID геномів
-        # ===============================
-
-        self.population = self._create_initial_population(self.innovation_manager)
-        self.species = []
-        self.generation = 0
-        self.best_genome_overall = None
-        self._speciate_population()
-        if not _is_loading:
+        if not _is_loading: # Цей блок для створення нової популяції
+            # Передаємо innovation_manager конструктору Genome
             self.population = self._create_initial_population(self.innovation_manager)
-            self._speciate_population() # Перше видоутворення використовує випадкових представників з поточної популяції
-            self._update_previous_gen_representatives() # Зберігаємо представників для наступного покоління
+            self._speciate_population() 
+            self._update_previous_gen_representatives()
     
     def _update_previous_gen_representatives(self):
         """Оновлює словник представників попереднього покоління."""
@@ -75,15 +72,13 @@ class NeatAlgorithm:
 
     # --- Решта методів класу NeatAlgorithm без змін ---
     # (залишаємо _create_initial_population, _speciate_population, і т.д. як були)
-    def _create_initial_population(self, innovation_manager: InnovationManager) -> list[Genome]: # Приймає менеджер
-        """Створює початкову популяцію геномів."""
+    def _create_initial_population(self, innovation_manager: InnovationManager) -> list[Genome]:
         population = []
         for _ in range(self.population_size):
             genome_id = self._get_next_genome_id()
-            # Передаємо той самий менеджер інновацій кожному новому геному
+            # Передаємо той самий innovation_manager кожному новому геному
             genome = Genome(genome_id, self.num_inputs, self.num_outputs, self.config, innovation_manager)
             population.append(genome)
-        # Після створення всієї популяції, лічильник інновацій в менеджері буде актуальним
         print(f"Initial population created. Next innovation number: {innovation_manager.innovation_counter}")
         return population
 
@@ -162,6 +157,125 @@ class NeatAlgorithm:
         print(f"DEBUG SAVE: Saving {len(state['population_genomes'])} total genomes, {len(state['current_active_population_ids'])} active population genomes.")
         return state
 
+    def get_state_data_for_json(self) -> Dict[str, Any]: # Новий метод для JSON
+        """Збирає дані для збереження стану NEAT у JSON-сумісному форматі."""
+        
+        # Збираємо всі унікальні геноми
+        relevant_genomes_map: Dict[Any, Genome] = {}
+
+        for g in self.population: # P_N+1
+            if g and g.id not in relevant_genomes_map: relevant_genomes_map[g.id] = g
+        for spec in self.species: # S_N (члени з P_N)
+            if spec:
+                if spec.representative and spec.representative.id not in relevant_genomes_map:
+                    relevant_genomes_map[spec.representative.id] = spec.representative
+                for member in spec.members:
+                    if member and member.id not in relevant_genomes_map:
+                        relevant_genomes_map[member.id] = member
+        for rep_genome in self.species_representatives_prev_gen.values(): # Репи для S_N (з P_N-1)
+            if rep_genome and rep_genome.id not in relevant_genomes_map:
+                relevant_genomes_map[rep_genome.id] = rep_genome
+        if self.best_genome_overall and self.best_genome_overall.id not in relevant_genomes_map:
+            relevant_genomes_map[self.best_genome_overall.id] = self.best_genome_overall
+
+        all_genomes_to_save_dicts = [g.to_dict() for g in relevant_genomes_map.values() if g]
+        
+        current_active_population_ids = [g.id for g in self.population if g]
+        species_state_data_dicts = [spec.to_dict() for spec in self.species if spec]
+        
+        prev_gen_reps_ids_data = {
+            spec_id: rep_g.id 
+            for spec_id, rep_g in self.species_representatives_prev_gen.items() if rep_g
+        }
+
+        state = {
+            'format_version': "neat_json_v1", # Додамо версію формату
+            'generation': self.generation,
+            'best_genome_overall_dict': self.best_genome_overall.to_dict() if self.best_genome_overall else None,
+            'innovation_manager_state_dict': self.innovation_manager.to_dict(),
+            'all_genomes_dicts': all_genomes_to_save_dicts, 
+            'current_active_population_ids': current_active_population_ids,
+            'species_state_data_dicts': species_state_data_dicts,
+            '_genome_id_counter_val': next(self._genome_id_counter) - 1, # Зберігаємо поточне значення лічильника
+            '_max_used_species_id': max((s.id for s in self.species if s), default=0),
+            'species_representatives_prev_gen_ids': prev_gen_reps_ids_data,
+            'generation_statistics': self.generation_statistics # Статистика вже має бути JSON-сумісною
+        }
+        return state
+
+    @classmethod
+    def load_from_json_data(cls, state_data: Dict[str, Any], config: dict, 
+                             num_inputs: int, num_outputs: int) -> 'NeatAlgorithm':
+        
+        format_version = state_data.get('format_version')
+        if format_version != "neat_json_v1":
+            print(f"Warning: Attempting to load data with version '{format_version}', expected 'neat_json_v1'. May encounter issues.")
+
+        initial_genome_id_to_set = state_data.get('_genome_id_counter_val', -1) + 1
+        # Передаємо _is_loading=True, щоб конструктор не створював початкову популяцію
+        neat = cls(config, num_inputs, num_outputs, 
+                   initial_genome_id_start=initial_genome_id_to_set, 
+                   _is_loading=True) 
+
+        neat.generation = state_data['generation']
+        
+        # Відновлюємо InnovationManager
+        im_state_dict = state_data.get('innovation_manager_state_dict')
+        if im_state_dict:
+            neat.innovation_manager = InnovationManager.from_dict(im_state_dict)
+        else: # Якщо немає, створюємо новий (менш імовірно, але для безпеки)
+            node_id_for_innov_manager = num_inputs + num_outputs + (1 if config.get('USE_BIAS_NODE', True) else 0)
+            neat.innovation_manager = InnovationManager(start_node_id=node_id_for_innov_manager)
+            neat.innovation_manager._next_node_id = im_state_dict.get('_next_node_id', node_id_for_innov_manager) # Відновлюємо лічильники
+            neat.innovation_manager._next_innovation_num = im_state_dict.get('_next_innovation_num',0)
+
+
+        # Завантажуємо ВСІ геноми в загальну карту
+        all_genomes_dicts = state_data.get('all_genomes_dicts', [])
+        genomes_by_id: Dict[Any, Genome] = {}
+        for g_data in all_genomes_dicts:
+            genome_obj = Genome.from_dict(g_data, config, neat.innovation_manager)
+            genomes_by_id[genome_obj.id] = genome_obj
+        
+        # Відновлюємо найкращий геном
+        best_genome_dict = state_data.get('best_genome_overall_dict')
+        if best_genome_dict:
+            # Якщо best_genome_overall.id вже є в genomes_by_id, використовуємо той об'єкт
+            if best_genome_dict['id'] in genomes_by_id:
+                 neat.best_genome_overall = genomes_by_id[best_genome_dict['id']]
+            else: # Малоймовірно, якщо all_genomes_dicts зібрані правильно
+                 neat.best_genome_overall = Genome.from_dict(best_genome_dict, config, neat.innovation_manager)
+        else:
+            neat.best_genome_overall = None
+            
+        # Відновлюємо АКТИВНУ популяцію
+        current_active_population_ids = state_data.get('current_active_population_ids', [])
+        neat.population = [genomes_by_id[gid] for gid in current_active_population_ids if gid in genomes_by_id]
+
+        # Налаштування лічильника ID видів
+        max_loaded_species_id = state_data.get('_max_used_species_id', 0)
+        Species._species_counter = itertools.count(max_loaded_species_id + 1)
+        
+        neat.species = []
+        loaded_species_data_dicts = state_data.get('species_state_data_dicts', [])
+        for s_data_dict in loaded_species_data_dicts:
+            species_obj = Species.from_dict(s_data_dict, genomes_by_id)
+            if species_obj:
+                neat.species.append(species_obj)
+        
+        neat.species_representatives_prev_gen = {}
+        prev_gen_reps_ids_data = state_data.get('species_representatives_prev_gen_ids', {})
+        for spec_id_str, rep_id_prev in prev_gen_reps_ids_data.items():
+            # Ключі з JSON можуть бути рядками, ID видів - числа
+            spec_id = int(spec_id_str) if isinstance(spec_id_str, str) and spec_id_str.isdigit() else spec_id_str
+
+            rep_genome_prev = genomes_by_id.get(rep_id_prev)
+            if rep_genome_prev:
+                neat.species_representatives_prev_gen[spec_id] = rep_genome_prev
+        
+        neat.generation_statistics = state_data.get('generation_statistics', [])
+        print(f"NEAT state loaded from JSON. Gen: {neat.generation}, Pop: {len(neat.population)}, Species: {len(neat.species)}, PrevReps: {len(neat.species_representatives_prev_gen)}")
+        return neat
     
     @classmethod
     def load_from_state_data(cls, state_data: dict, config: dict, num_inputs: int, num_outputs: int) -> 'NeatAlgorithm':
@@ -510,7 +624,14 @@ class NeatAlgorithm:
                          parent2 = random.choice(parents)
                          attempts += 1
                      g1_is_fitter = parent1.fitness > parent2.fitness
-                     child = Genome.crossover(parent1, parent2, g1_is_fitter)
+                     # Оновлений виклик Genome.crossover
+                     child = Genome.crossover(
+                         parent1, 
+                         parent2, 
+                         g1_is_fitter,
+                         self.config,  # Передаємо конфігурацію
+                         self.innovation_manager # Передаємо менеджер інновацій
+                     )
                  else:
                      child = parent1.copy()
 
@@ -560,7 +681,7 @@ class NeatAlgorithm:
 
         total_fitness = 0.0
         max_fitness = -float('inf')
-        current_best_genome = None
+        current_best_genome: Optional[Genome] = None # Явна типізація
         evaluation_results = {}
 
         # --- Паралельна оцінка фітнесу ---
@@ -584,21 +705,21 @@ class NeatAlgorithm:
                 for future in as_completed(futures):
                     genome_id = futures[future]
                     try:
-                        _, fitness = future.result() # Отримуємо результат (id, fitness)
-                        evaluation_results[genome_id] = fitness
+                        _, fitness_val = future.result() # Отримуємо результат (id, fitness)
+                        evaluation_results[genome_id] = fitness_val
                     except Exception as exc:
                         print(f'Genome {genome_id} evaluation generated an exception: {exc}')
                         evaluation_results[genome_id] = 0.001 # Мінімальний фітнес при помилці
         except Exception as pool_exc:
              print(f"Error during ProcessPoolExecutor execution: {pool_exc}")
              # Якщо пул не запустився, оцінюємо послідовно як запасний варіант
-             for genome_id, genome in population_to_evaluate:
-                 try:
-                     _, fitness = evaluation_function((genome_id, genome), config_copy)
-                     evaluation_results[genome_id] = fitness
-                 except Exception as eval_exc:
-                      print(f"Sequential evaluation error for genome {genome_id}: {eval_exc}")
-                      evaluation_results[genome_id] = 0.001
+             for genome_id, genome_obj in population_to_evaluate: # Змінено ім'я змінної
+                try:
+                    _, fitness_val = evaluation_function((genome_id, genome_obj), config_copy)
+                    evaluation_results[genome_id] = fitness_val
+                except Exception as eval_exc:
+                    print(f"Sequential evaluation error for genome {genome_id}: {eval_exc}")
+                    evaluation_results[genome_id] = 0.001
         # ------------------------------------
 
         # Оновлюємо фітнес в геномах поточної популяції
@@ -615,31 +736,44 @@ class NeatAlgorithm:
         avg_fitness = total_fitness / valid_evaluated_genomes if valid_evaluated_genomes > 0 else 0.0
 
         # Оновлюємо найкращий геном за весь час
-        if self.best_genome_overall is None or (current_best_genome and current_best_genome.fitness > self.best_genome_overall.fitness):
+        if self.best_genome_overall is None or \
+           (current_best_genome and current_best_genome.fitness > self.best_genome_overall.fitness):
             # Копіюємо кращий геном, щоб зберегти його стан на цей момент
             self.best_genome_overall = current_best_genome.copy() if current_best_genome else None
 
         # --- Наступні кроки NEAT ---
-        # Оновлюємо статистику перед тим, як _speciate_population змінить self.species
-        stats = {
+        # --- Оновлено формування статистики для JSON-сумісності ---
+        stats_for_generation = { # Змінено ім'я змінної
             "generation": self.generation,
             "max_fitness": max_fitness if max_fitness > -float('inf') else None,
             "average_fitness": avg_fitness,
-            "num_species": len(self.species), # Кількість видів ДО перевидоутворення
-            "best_genome_current_gen": current_best_genome,
-            "best_genome_overall": self.best_genome_overall
+            "num_species_before_reproduction": len(self.species), # К-сть видів після видоутворення поточної популяції
+            # Зберігаємо ID та фітнес замість повних об'єктів Genome
+            "best_genome_current_gen_id": current_best_genome.id if current_best_genome else None,
+            "best_genome_current_gen_fitness": current_best_genome.fitness if current_best_genome else None,
+            "best_genome_overall_id_at_this_gen": self.best_genome_overall.id if self.best_genome_overall else None,
+            "best_genome_overall_fitness_at_this_gen": self.best_genome_overall.fitness if self.best_genome_overall else None,
         }
         # Зберігаємо представників поточних видів ПЕРЕД тим, як _speciate_population їх потенційно змінить
-        self._update_previous_gen_representatives() # <--- ВАЖЛИВО
+        self._update_previous_gen_representatives() # Використовує self.species, які ще відносяться до поточної популяції
+        
+        self._speciate_population() # Оновлює self.species на основі поточної популяції
+        self._calculate_adjusted_fitness() # Для оновлених self.species
+        
+        # Зберігаємо кількість видів після видоутворення та можливої стагнації (яка відбувається в _reproduce)
+        # Фактична кількість видів, що братиме участь у розмноженні
+        # num_species_for_reproduction = len(self.species) # Можна додати, якщо потрібно відстежувати до _handle_stagnation
 
-        self._speciate_population() # Тепер використовує self.species_representatives_prev_gen
-        self._calculate_adjusted_fitness()
-        next_population = self._reproduce()
-        self.population = next_population
-        stats["num_species_after_speciation"] = len(self.species)
-        self.generation_statistics.append(stats) # Зберігаємо фінальну статистик
-        # Повертаємо статистику
-        return stats
+        next_population = self._reproduce() # _reproduce може змінювати self.species через _handle_stagnation
+        
+        self.population = next_population # self.population тепер P_N+1
+        
+        # Кількість видів після всіх операцій (видоутворення, стагнація)
+        stats_for_generation["num_species_after_reproduction_cycle"] = len(self.species) 
+        
+        self.generation_statistics.append(stats_for_generation) 
+        
+        return stats_for_generation # Повертаємо JSON-сумісний словник
 
     def get_best_genome_overall(self) -> Genome | None:
         return self.best_genome_overall

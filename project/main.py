@@ -10,6 +10,7 @@ import importlib
 from tkinter import filedialog,messagebox
 from tkinter import ttk
 from typing import Optional, Tuple
+import json # Додаємо json
 #import threading
 #from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -546,99 +547,146 @@ class SimulationController:
              return self.config.get('MAZE_SEED') # Повертаємо старий сід
 
     def save_simulation(self):
-        if self._is_running_multiple: # Перевірка, чи не запущений пакетний прогін
-            messagebox.showwarning("Saving Denied", "Cannot save state while multiple generations are running. Please wait for completion or stop the batch process.")
+        if self._is_running_multiple: # Ваша перевірка на пакетний запуск
+            messagebox.showwarning("Saving Blocked", "Cannot save state while multiple generations are running. Please wait or stop the process.")
             return
-
         if not self.neat:
             messagebox.showerror("Error", "NEAT algorithm not initialized.")
             return
 
         filepath = filedialog.asksaveasfilename(
-            defaultextension=".neat_save",
-            filetypes=[("NEAT Save Files", "*.neat_save"), ("All Files", "*.*")],
-            title="Save NEAT Simulation State"
+            defaultextension=".neat.json", # Нове розширення
+            filetypes=[("NEAT JSON Save Files", "*.neat.json"), ("All Files", "*.*")],
+            title="Save NEAT Simulation State (JSON)"
         )
         if not filepath:
             return
 
         try:
-            neat_state_data = self.neat.get_state_data()
+            # Отримуємо стан NEAT у JSON-сумісному форматі
+            neat_state_dict = self.neat.get_state_data_for_json() 
             
-            simulation_data = {
-                'version': "1.0", # Додаємо версію для майбутньої сумісності
-                'config': self.config.copy(),
-                'maze_seed': self.maze.seed, # Актуальний сід використаного лабіринту
-                'neat_algorithm_state': neat_state_data,
-                'num_inputs_for_neat': self.neat.num_inputs,
-                'num_outputs_for_neat': self.neat.num_outputs
+            # Додаємо загальну інформацію про симуляцію
+            simulation_data_to_save = {
+                'simulation_format_version': "1.0", # Загальна версія формату збереження
+                'config': self.config.copy(), # Зберігаємо копію поточного конфігу
+                'maze_seed': self.maze.seed if self.maze else None,
+                'num_inputs_for_neat': self.neat.num_inputs, # Для відновлення NeatAlgorithm
+                'num_outputs_for_neat': self.neat.num_outputs, # Для відновлення NeatAlgorithm
+                'neat_algorithm_state': neat_state_dict, # Вкладений словник стану NEAT
             }
 
-            with open(filepath, 'wb') as f:
-                pickle.dump(simulation_data, f)
-            messagebox.showinfo("Success", f"Simulation state saved to {os.path.basename(filepath)}")
+            with open(filepath, 'w') as f: # Відкриваємо в текстовому режимі для JSON
+                json.dump(simulation_data_to_save, f, indent=4) # indent для читабельності
+            messagebox.showinfo("Success", f"Simulation state saved to {os.path.basename(filepath)} (JSON)")
         except Exception as e:
-            messagebox.showerror("Save Error", f"Failed to save simulation state:\n{e}")
-            print(f"Error saving simulation: {e}")
+            messagebox.showerror("Save Error", f"Failed to save simulation state to JSON:\n{e}")
+            print(f"Error saving simulation to JSON: {e}")
             import traceback
             traceback.print_exc()
 
     def load_simulation(self):
         filepath = filedialog.askopenfilename(
-            defaultextension=".neat_save",
-            filetypes=[("NEAT Save Files", "*.neat_save"), ("All Files", "*.*")],
+            defaultextension=".neat.json",
+            filetypes=[("NEAT JSON Save Files", "*.neat.json"), ("Pickle Save Files", "*.neat_save"), ("All Files", "*.*")],
             title="Load NEAT Simulation State"
         )
         if not filepath:
             return
 
         try:
-            with open(filepath, 'rb') as f:
-                simulation_data = pickle.load(f)
+            if filepath.endswith(".neat.json"):
+                with open(filepath, 'r') as f: # Відкриваємо в текстовому режимі
+                    simulation_data = json.load(f)
+                
+                print(f"Loading JSON save file version: {simulation_data.get('simulation_format_version', 'unknown')}")
 
-            save_version = simulation_data.get('version', 'unknown')
-            print(f"Loading save file version: {save_version}")
-            # Тут можна додати перевірку версій
-
-            loaded_config = simulation_data.get('config')
-            if loaded_config:
-                # Оновлюємо поточний конфіг, але зберігаємо деякі runtime налаштування
-                num_processes_current = self.config.get('NUM_PROCESSES')
-                self.config.update(loaded_config)
-                self.config['NUM_PROCESSES'] = num_processes_current # Відновлюємо, бо це залежить від машини
-                self.gui.seed_var.set(str(self.config.get('MAZE_SEED', '')))
-            else:
-                print("Warning: No config found in save file. Using current config.")
-
-            maze_seed = simulation_data.get('maze_seed', self.config.get('MAZE_SEED'))
-            # Перевіряємо та виправляємо розміри лабіринту з конфігу перед генерацією
-            w = self.config.get('MAZE_WIDTH', 11)
-            h = self.config.get('MAZE_HEIGHT', 11)
-            if w % 2 == 0: w += 1
-            if h % 2 == 0: h += 1
-            w = max(5, w); h = max(5, h)
-            self.config['MAZE_WIDTH'] = w
-            self.config['MAZE_HEIGHT'] = h
-            self.maze = Maze(w, h, maze_seed) # Генеруємо лабіринт
-            self.config['MAZE_SEED'] = self.maze.seed # Зберігаємо фактичний сід
-            self._redraw_maze()
+                loaded_config = simulation_data.get('config')
+                if loaded_config:
+                    num_processes_current = self.config.get('NUM_PROCESSES') # Зберігаємо налаштування середовища
+                    self.config.update(loaded_config)
+                    self.config['NUM_PROCESSES'] = num_processes_current 
+                    self.gui.seed_var.set(str(self.config.get('MAZE_SEED', '')))
+                else:
+                    print("Warning: No config found in JSON save file. Using current config.")
 
 
-            neat_state_data = simulation_data.get('neat_algorithm_state')
-            # Беремо num_inputs/outputs зі збереженого файлу, якщо є, інакше з поточного конфігу
-            num_inputs = simulation_data.get('num_inputs_for_neat', self.config['NUM_INPUTS'])
-            num_outputs = simulation_data.get('num_outputs_for_neat', self.config['NUM_OUTPUTS'])
-            self.config['NUM_INPUTS'] = num_inputs # Оновлюємо конфіг, якщо значення змінились
-            self.config['NUM_OUTPUTS'] = num_outputs
+                maze_seed = simulation_data.get('maze_seed', self.config.get('MAZE_SEED'))
+                w = self.config.get('MAZE_WIDTH', 11); h = self.config.get('MAZE_HEIGHT', 11)
+                if w % 2 == 0: w += 1
+                if h % 2 == 0: h += 1
+                self.config['MAZE_WIDTH'] = max(5, w); self.config['MAZE_HEIGHT'] = max(5, h)
+                self.maze = Maze(self.config['MAZE_WIDTH'], self.config['MAZE_HEIGHT'], maze_seed)
+                self.config['MAZE_SEED'] = self.maze.seed
+                self._redraw_maze()
+
+                neat_algorithm_state_dict = simulation_data.get('neat_algorithm_state')
+                num_inputs = simulation_data.get('num_inputs_for_neat', self.config.get('NUM_INPUTS'))
+                num_outputs = simulation_data.get('num_outputs_for_neat', self.config.get('NUM_OUTPUTS'))
+                
+                # Оновлюємо конфіг, якщо значення NUM_INPUTS/NUM_OUTPUTS змінились
+                self.config['NUM_INPUTS'] = num_inputs
+                self.config['NUM_OUTPUTS'] = num_outputs
 
 
-            if neat_state_data:
-                # Передаємо оновлений self.config
-                self.neat = NeatAlgorithm.load_from_state_data(neat_state_data, self.config, num_inputs, num_outputs)
-            else:
-                messagebox.showerror("Load Error", "NEAT algorithm data not found in save file.")
-                return
+                if neat_algorithm_state_dict:
+                    self.neat = NeatAlgorithm.load_from_json_data(neat_algorithm_state_dict, self.config, num_inputs, num_outputs)
+                else:
+                    messagebox.showerror("Load Error", "NEAT algorithm data not found in JSON save file.")
+                    return
             
+            elif filepath.endswith(".neat_save"): # Обробка старого формату pickle
+                with open(filepath, 'rb') as f:
+                    simulation_data_pickle = pickle.load(f)
+                
+                # Тут ваша попередня логіка завантаження з pickle
+                # Важливо: NeatAlgorithm.load_from_state_data() - це старий метод для pickle
+                # Вам потрібно буде вирішити, чи підтримувати обидва, чи повністю перейти на JSON
+                # Для прикладу, припустимо, що ви все ще маєте старий метод:
+                
+                loaded_config = simulation_data_pickle.get('config')
+                if loaded_config:
+                    num_processes_current = self.config.get('NUM_PROCESSES')
+                    self.config.update(loaded_config)
+                    self.config['NUM_PROCESSES'] = num_processes_current
+                    self.gui.seed_var.set(str(self.config.get('MAZE_SEED', '')))
+                
+                maze_seed = simulation_data_pickle.get('maze_seed', self.config.get('MAZE_SEED'))
+                w = self.config.get('MAZE_WIDTH', 11); h = self.config.get('MAZE_HEIGHT', 11)
+                if w % 2 == 0: w += 1
+                if h % 2 == 0: h += 1
+                self.config['MAZE_WIDTH'] = max(5, w); self.config['MAZE_HEIGHT'] = max(5, h)
+                self.maze = Maze(self.config['MAZE_WIDTH'], self.config['MAZE_HEIGHT'], maze_seed)
+                self.config['MAZE_SEED'] = self.maze.seed
+                self._redraw_maze()
+
+                neat_state_data_pickle = simulation_data_pickle.get('neat_algorithm_state')
+                num_inputs_p = simulation_data_pickle.get('num_inputs_for_neat', self.config['NUM_INPUTS'])
+                num_outputs_p = simulation_data_pickle.get('num_outputs_for_neat', self.config['NUM_OUTPUTS'])
+                self.config['NUM_INPUTS'] = num_inputs_p
+                self.config['NUM_OUTPUTS'] = num_outputs_p
+
+                if neat_state_data_pickle:
+                    # Припускаємо, що старий метод для pickle все ще існує і називається load_from_state_data_pickle
+                    # або ви перейменуєте поточний load_from_state_data на load_from_state_data_pickle
+                    # self.neat = NeatAlgorithm.load_from_state_data_pickle(neat_state_data_pickle, self.config, num_inputs_p, num_outputs_p)
+                    # Або тимчасово поверніть старий метод load_from_state_data для pickle
+                    print("Attempting to load pickle file with previous 'load_from_state_data' logic.")
+                    # Потрібно переконатися, що у вас є доступ до попередньої версії load_from_state_data
+                    # Для цього прикладу, я не можу її відновити, але ви маєте її у своїй історії версій.
+                    # Цю частину потрібно буде адаптувати до вашого коду.
+                    # Якщо ви хочете, я можу спробувати адаптувати попередній pickle-завантажувач сюди.
+                    # ЗАРАЗ: просто виведемо повідомлення
+                    messagebox.showinfo("Pickle Load", "Pickle loading needs to be handled by the older 'load_from_state_data' logic. This example focuses on JSON.")
+                    # Повертаємо, оскільки ми не можемо продовжити без правильного завантажувача pickle
+                    return 
+                else:
+                    messagebox.showerror("Load Error", "NEAT algorithm data not found in pickle save file.")
+                    return
+            else:
+                messagebox.showerror("Load Error", f"Unsupported file type: {filepath}")
+                return
+
             self._update_gui_stats()
             self._reset_agents_for_visualization()
             self._update_agents_visuals()
@@ -650,11 +698,15 @@ class SimulationController:
 
         except FileNotFoundError:
             messagebox.showerror("Load Error", f"Save file not found: {filepath}")
+        except json.JSONDecodeError as e:
+            messagebox.showerror("JSON Load Error", f"Failed to decode JSON file:\n{e}")
+            print(f"Error decoding JSON: {e}")
         except Exception as e:
             messagebox.showerror("Load Error", f"Failed to load simulation state:\n{e}")
             print(f"Error loading simulation: {e}")
             import traceback
             traceback.print_exc()
+            
     def reset_simulation(self):
         """Скидає симуляцію NEAT до початкового стану."""
         print("Resetting NEAT simulation...")

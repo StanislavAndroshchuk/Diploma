@@ -1,4 +1,5 @@
 # neat/innovation.py
+from typing import Dict, Tuple, Any
 
 class InnovationManager:
     """
@@ -10,18 +11,58 @@ class InnovationManager:
    
     """
     def __init__(self, start_node_id=0, start_innovation_num=0):
-        # Глобальні лічильники, які НЕ скидаються між поколіннями
         self._next_node_id = int(start_node_id)
         self._next_innovation_num = int(start_innovation_num)
+        self._current_generation_connection_innovations: Dict[Tuple[int, int], int] = {}
+        self._current_generation_node_innovations: Dict[int, Tuple[int, int, int]] = {}
 
-        # Історія інновацій в ПОТОЧНОМУ поколінні. Скидається на початку кожного покоління.
-        # Зберігає відображення для НОВИХ з'єднань: (in_node_id, out_node_id) -> innovation_num
-        self._current_generation_connection_innovations = {}
-        # Зберігає відображення для НОВИХ вузлів:
-        # split_conn_innov -> (new_node_id, new_conn_innov1, new_conn_innov2)
-        # де new_conn_innov1 - інновація зв'язку in -> new_node
-        # де new_conn_innov2 - інновація зв'язку new_node -> out
-        self._current_generation_node_innovations = {}
+    def _connection_key_to_str(self, key_tuple: Tuple[int, int]) -> str:
+        return f"{key_tuple[0]}_{key_tuple[1]}"
+
+    def _connection_key_from_str(self, key_str: str) -> Tuple[int, int]:
+        parts = key_str.split('_')
+        return (int(parts[0]), int(parts[1]))
+    
+    def to_dict(self) -> Dict[str, Any]:
+        # Конвертуємо ключі-кортежі в рядки для _current_generation_connection_innovations
+        conn_innov_str_keys = {
+            self._connection_key_to_str(k): v 
+            for k, v in self._current_generation_connection_innovations.items()
+        }
+        # Ключі в _current_generation_node_innovations є int, JSON їх перетворить на str автоматично
+        node_innov_str_keys = {
+            str(k): v 
+            for k,v in self._current_generation_node_innovations.items()
+        }
+        return {
+            '_next_node_id': self._next_node_id,
+            '_next_innovation_num': self._next_innovation_num,
+            '_current_generation_connection_innovations': conn_innov_str_keys,
+            '_current_generation_node_innovations': node_innov_str_keys 
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'InnovationManager':
+        manager = cls(
+            start_node_id=data['_next_node_id'], 
+            start_innovation_num=data['_next_innovation_num']
+        )
+        # При завантаженні, ми відновлюємо лічильники, але історія поточного покоління
+        # зазвичай скидається на початку нової генерації. 
+        # Якщо потрібно відновити історію (наприклад, для продовження генерації з середини),
+        # тоді потрібно десеріалізувати _current_generation_... словники.
+        # Зазвичай, їх просто залишають порожніми після завантаження стану.
+        # У вашому випадку, для повного відновлення стану, десеріалізуємо:
+        
+        manager._current_generation_connection_innovations = {
+            manager._connection_key_from_str(k_str): v
+            for k_str, v in data.get('_current_generation_connection_innovations', {}).items()
+        }
+        manager._current_generation_node_innovations = {
+            int(k_str): v
+            for k_str, v in data.get('_current_generation_node_innovations', {}).items()
+        }
+        return manager
 
     def get_node_id(self) -> int:
         """Повертає наступний доступний унікальний ID для нового вузла."""

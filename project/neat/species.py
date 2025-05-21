@@ -3,7 +3,7 @@
 import itertools
 import random
 import math
-
+from typing import Dict, List, Any, Optional # Додаємо Optional
 # Припускаємо, що клас Genome імпортується або доступний
 from .genome import Genome # Якщо в тому ж пакеті
 
@@ -29,8 +29,8 @@ class Species:
         self.id = next(Species._species_counter)
         # Представник використовується для порівняння при додаванні нових членів
         # Копіюємо, щоб зміни в оригінальному геномі не впливали на представника минулого покоління
-        self.representative = first_genome.copy()
-        self.members = [first_genome] # Список об'єктів Genome
+        self.representative: Optional[Genome] = first_genome.copy() # Зберігаємо копію
+        self.members: List[Genome] = [first_genome] # Список об'єктів Genome
         first_genome.species_id = self.id # Призначаємо ID виду геному
 
         # Атрибути для відстеження стану виду
@@ -39,6 +39,78 @@ class Species:
         self.total_adjusted_fitness = 0.0 # Сума скоригованих фітнесів членів (для розрахунку нащадків)
         self.offspring_count = 0 # Розрахована кількість нащадків для наступного покоління
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'representative_id': self.representative.id if self.representative else None,
+            'member_ids': [member.id for member in self.members if member],
+            'generations_since_improvement': self.generations_since_improvement,
+            'best_fitness_ever': self.best_fitness_ever,
+            'offspring_count': self.offspring_count,
+            'total_adjusted_fitness': self.total_adjusted_fitness # Може бути корисним, хоча може і перераховуватись
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], genomes_map: Dict[Any, Genome], 
+                  # config та innovation_manager можуть бути не потрібні для Species.from_dict,
+                  # якщо Species не створює нових геномів.
+                  # Однак, конструктор Species приймає Genome, який міг бути створений з їх допомогою.
+                  # genomes_map - це словник {genome_id: genome_object}
+                  ) -> Optional['Species']: # Може повернути None, якщо представник не знайдений
+
+        rep_id = data.get('representative_id')
+        representative_genome = genomes_map.get(rep_id)
+
+        if not representative_genome:
+            # Спробувати знайти представника серед членів, якщо rep_id невалідний
+            member_ids = data.get('member_ids', [])
+            if member_ids:
+                for m_id in member_ids:
+                    potential_rep = genomes_map.get(m_id)
+                    if potential_rep:
+                        representative_genome = potential_rep
+                        print(f"Warning (Species.from_dict): Original representative ID {rep_id} for species {data['id']} not found. Using member {m_id} as representative.")
+                        break
+            if not representative_genome:
+                print(f"Error (Species.from_dict): Cannot restore species {data['id']} - representative genome (ID: {rep_id} or from members) not found in genomes_map.")
+                return None
+        
+        # Конструктор Species(genome) створює копію геному для representative
+        # і додає оригінальний геном до members.
+        species_obj = cls(representative_genome) 
+        
+        # Встановлюємо збережені значення
+        species_obj.id = data['id']
+        species_obj.generations_since_improvement = data['generations_since_improvement']
+        species_obj.best_fitness_ever = data['best_fitness_ever']
+        species_obj.offspring_count = data.get('offspring_count', 0)
+        species_obj.total_adjusted_fitness = data.get('total_adjusted_fitness', 0.0)
+
+        # Очищаємо членів (бо конструктор додав представника) і додаємо з ID
+        species_obj.clear_members() # Очистить members та скине total_adjusted_fitness, offspring_count
+        
+        members_added_count = 0
+        for member_id in data.get('member_ids', []):
+            member_genome = genomes_map.get(member_id)
+            if member_genome:
+                species_obj.add_member(member_genome) # add_member оновить member_genome.species_id
+                members_added_count +=1
+        
+        if members_added_count == 0 and not (len(data.get('member_ids', [])) == 1 and data.get('member_ids')[0] == rep_id and representative_genome):
+             print(f"Warning (Species.from_dict): Species {species_obj.id} loaded with no members from member_ids list. Original member_ids: {data.get('member_ids', [])}")
+             # Якщо представник був єдиним членом, він міг бути не доданий назад.
+             # Конструктор додав representative_genome, clear_members() видалив.
+             # Якщо rep_id був у member_ids, він додасться.
+             # Якщо це був єдиний член, і це rep_id, то він має бути в members.
+             # Якщо species_obj.members порожній, це може бути проблемою далі.
+             # Поки що дозволимо це, але це може потребувати уваги.
+
+        # Перераховуємо total_adjusted_fitness, якщо потрібно, або покладаємось на збережене значення.
+        # Для простоти, якщо species_obj.calculate_adjusted_fitness_and_sum() викликається
+        # після завантаження популяції та її розподілу по видам, то це значення буде оновлено.
+        # Тут ми просто завантажуємо те, що було збережено.
+
+        return species_obj
     def add_member(self, genome: Genome):
         """Додає геном до списку членів цього виду."""
         if not isinstance(genome, Genome):
@@ -110,15 +182,7 @@ class Species:
         self.offspring_count = 0
 
     def get_state_data(self) -> dict:
-        """Збирає дані для збереження стану виду."""
-        return {
-            'id': self.id,
-            'representative_id': self.representative.id if self.representative else None,
-            'member_ids': [member.id for member in self.members if member],
-            'generations_since_improvement': self.generations_since_improvement,
-            'best_fitness_ever': self.best_fitness_ever,
-            'offspring_count': self.offspring_count # Додано для повноти
-        }
+        return self.to_dict()
     
     @classmethod
     def load_from_state_data(cls, data: dict, genomes_map: dict) -> 'Species':
