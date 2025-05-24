@@ -5,11 +5,7 @@ venv/Lib/
 venv/Scripts/
 venv/pyvenv.cfg
 .vscode/settings.json
-project/visualization/__pycache__/
-project/neat/__pycache__/
-project/environment/__pycache__/
-project/__pycache__/
-not_project/aa/__pycache__/
-not_project/temp1/__pycache__/
-not_project/visualiser/__pycache__/
 project/saves/v1/
+debug_output_loop.txt
+genome.json
+genomes.json
