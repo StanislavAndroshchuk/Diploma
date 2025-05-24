@@ -21,13 +21,14 @@ WEIGHT_MUTATE_POWER = 0.5
 WEIGHT_CAP = 8.0
 WEIGHT_INIT_RANGE = 1.0
 
+
 # --- Параметри початкової структури ---
 INITIAL_CONNECTIONS = 8 # Кількість випадкових початкових з'єднань
 
 # --- Параметри кросоверу та відбору ---
 CROSSOVER_RATE = 0.75
 INHERIT_DISABLED_GENE_RATE = 0.75
-ELITISM = 1
+ELITISM = 0
 SELECTION_PERCENTAGE = 0.20
 
 # --- Параметри середовища та симуляції ---
@@ -45,7 +46,7 @@ MAX_STEPS_PER_EVALUATION = 400
 NUM_RANGEFINDERS = 4
 RANGEFINDER_MAX_DIST = 8.0
 NUM_RADAR_SLICES = 2
-AGENT_MAX_SPEED = 1
+AGENT_MAX_SPEED = 0.5
 
 # --- Параметри візуалізації ---
 CELL_SIZE_PX = 20

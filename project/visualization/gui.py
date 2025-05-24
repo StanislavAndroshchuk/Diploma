@@ -8,6 +8,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, Menu
 from PIL import Image, ImageTk, ImageDraw
 from typing import Optional, TYPE_CHECKING
+import pandas as pd  # Для _plot_complexity_analysis
+from neat.json_serializer import NEATJSONSerializer  # Для _export_current_data
+from neat.data_analyzer import NEATDataAnalyzer 
 import threading
 # --- Імпорт для type hinting без циклічних залежностей ---
 if TYPE_CHECKING:
@@ -143,20 +146,217 @@ class MazeGUI:
         menubar = Menu(self.master)
         self.master.config(menu=menubar)
 
-        # --- Меню "Графіки" ---
+        # --- Меню "File" ---
+        file_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        
+        file_menu.add_command(label="Save State (JSON)", 
+                            command=lambda: self.main_controller.save_simulation() if self.main_controller else None)
+        file_menu.add_command(label="Load State", 
+                            command=lambda: self.main_controller.load_simulation() if self.main_controller else None)
+        file_menu.add_separator()
+        file_menu.add_command(label="Export Current Data to CSV", command=self._export_current_data)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.master.quit)
+
+        # --- Меню "Plots" ---
         plots_menu = Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Plots", menu=plots_menu)
 
         plots_menu.add_command(label="Average Fitness per Generation",
-                               command=self._plot_avg_fitness)
+                            command=self._plot_avg_fitness)
         plots_menu.add_command(label="Max Fitness per Generation",
-                               command=self._plot_max_fitness)
-        # Додайте сюди інші графіки за потреби
-        # plots_menu.add_separator()
-        # plots_menu.add_command(label="Number of Species per Generation",
-        #                        command=self._plot_num_species)
+                            command=self._plot_max_fitness)
+        plots_menu.add_command(label="Species Diversity",
+                            command=self._plot_species_diversity)
+        plots_menu.add_separator()
+        plots_menu.add_command(label="Complexity Analysis",
+                            command=self._plot_complexity_analysis)
+        
+        # --- Меню "Analysis" ---
+        analysis_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Analysis", menu=analysis_menu)
+        
+        analysis_menu.add_command(label="Load & Analyze JSON File",
+                                command=self._analyze_json_file)
+        analysis_menu.add_command(label="Compare Two Runs",
+                                command=self._compare_runs)
 
+    def _plot_species_diversity(self):
+        """Відображає графік кількості видів."""
+        stats = self._get_plot_data()
+        if not stats:
+            messagebox.showinfo("No Data", "No generation data available to plot.")
+            return
 
+        generations = [s['generation'] for s in stats]
+        num_species = [s.get('num_species', 0) for s in stats]
+
+        plot_win = PlotWindow(self.master, title="Species Diversity")
+        
+        # Використовуємо matplotlib напряму для кращого контролю
+        plot_win.figure.clear()
+        ax = plot_win.figure.add_subplot(111)
+        ax.plot(generations, num_species, label='Number of Species', linewidth=2, color='green')
+        ax.fill_between(generations, num_species, alpha=0.3, color='green')
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Number of Species')
+        ax.set_title('Species Diversity Over Generations')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plot_win.canvas.draw()
+
+    def _plot_complexity_analysis(self):
+        """Аналізує складність мереж у поточному запуску."""
+        if not self.main_controller or not self.main_controller.neat:
+            messagebox.showerror("Error", "No active simulation.")
+            return
+        
+        # Збираємо дані про складність
+        complexity_data = []
+        for genome in self.main_controller.neat.population:
+            if genome:
+                num_nodes = len(genome.nodes)
+                num_connections = sum(1 for c in genome.connections.values() if c.enabled)
+                complexity_data.append({
+                    'nodes': num_nodes,
+                    'connections': num_connections,
+                    'fitness': genome.fitness
+                })
+        
+        if not complexity_data:
+            messagebox.showinfo("No Data", "No genome data available.")
+            return
+        
+        # Створюємо графік
+        plot_win = PlotWindow(self.master, title="Network Complexity Analysis")
+        plot_win.figure.clear()
+        
+        nodes = [d['nodes'] for d in complexity_data]
+        connections = [d['connections'] for d in complexity_data]
+        fitness = [d['fitness'] for d in complexity_data]
+        
+        ax = plot_win.figure.add_subplot(111)
+        scatter = ax.scatter(nodes, connections, c=fitness, cmap='viridis', s=50, alpha=0.6)
+        ax.set_xlabel('Number of Nodes')
+        ax.set_ylabel('Number of Active Connections')
+        ax.set_title('Network Complexity (Current Generation)')
+        
+        # Додаємо colorbar
+        cbar = plot_win.figure.colorbar(scatter, ax=ax)
+        cbar.set_label('Fitness')
+        
+        plot_win.canvas.draw()
+    def _export_current_data(self):
+        """Експортує поточні дані тренування в JSON."""
+        if not self.main_controller or not self.main_controller.neat:
+            messagebox.showerror("Error", "No active simulation to export.")
+            return
+        
+        from tkinter import filedialog
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            title="Export Training Data"
+        )
+        
+        if filepath:
+            try:
+                from neat.json_serializer import NEATJSONSerializer
+                NEATJSONSerializer.save_neat_state(
+                    filepath, 
+                    self.main_controller.neat, 
+                    self.main_controller.config.copy()
+                )
+                messagebox.showinfo("Success", f"Data exported to {os.path.basename(filepath)}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to export data:\n{e}")
+
+    def _analyze_json_file(self):
+        """Завантажує та аналізує JSON файл."""
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            title="Select JSON File to Analyze"
+        )
+        
+        if not filepath:
+            return
+        
+        try:
+            from neat.data_analyzer import NEATDataAnalyzer
+            analyzer = NEATDataAnalyzer(filepath)
+            
+            # Створюємо нове вікно для відображення аналізу
+            analysis_window = tk.Toplevel(self.master)
+            analysis_window.title(f"Analysis: {os.path.basename(filepath)}")
+            analysis_window.geometry("600x400")
+            
+            # Текстове поле для виводу інформації
+            text_widget = tk.Text(analysis_window, wrap=tk.WORD)
+            text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Виводимо базову інформацію
+            info = analyzer.get_basic_info()
+            text_widget.insert(tk.END, "=== Basic Information ===\n")
+            for key, value in info.items():
+                text_widget.insert(tk.END, f"{key}: {value}\n")
+            
+            # Статистика фітнесу
+            df = analyzer.get_fitness_statistics()
+            if not df.empty:
+                text_widget.insert(tk.END, "\n=== Fitness Statistics ===\n")
+                text_widget.insert(tk.END, f"Final Max Fitness: {df['max_fitness'].iloc[-1]:.4f}\n")
+                text_widget.insert(tk.END, f"Average Max Fitness: {df['max_fitness'].mean():.4f}\n")
+                text_widget.insert(tk.END, f"Fitness Improvement: {df['max_fitness'].iloc[-1] - df['max_fitness'].iloc[0]:.4f}\n")
+            
+            # Кнопки для графіків
+            button_frame = ttk.Frame(analysis_window)
+            button_frame.pack(fill=tk.X, padx=10, pady=5)
+            
+            ttk.Button(button_frame, text="Show Fitness Plot",
+                    command=lambda: analyzer.plot_fitness_over_time()).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="Show Species Plot", 
+                    command=lambda: analyzer.plot_species_diversity()).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="Show Complexity Plot",
+                    command=lambda: analyzer.plot_complexity_vs_fitness()).pack(side=tk.LEFT, padx=5)
+            
+        except Exception as e:
+            messagebox.showerror("Analysis Error", f"Failed to analyze file:\n{e}")
+
+    def _compare_runs(self):
+        """Порівнює два запуски NEAT."""
+        from tkinter import filedialog
+        from neat.data_analyzer import NEATDataAnalyzer
+        
+        # Вибираємо перший файл
+        file1 = filedialog.askopenfilename(
+            title="Select First JSON File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file1:
+            return
+        
+        # Вибираємо другий файл
+        file2 = filedialog.askopenfilename(
+            title="Select Second JSON File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file2:
+            return
+        
+        try:
+            analyzer1 = NEATDataAnalyzer(file1)
+            analyzer2 = NEATDataAnalyzer(file2)
+            
+            # Імена файлів для міток
+            label1 = os.path.basename(file1).replace('.json', '')
+            label2 = os.path.basename(file2).replace('.json', '')
+            
+            analyzer1.compare_runs(analyzer2, labels=(label1, label2))
+        except Exception as e:
+            messagebox.showerror("Comparison Error", f"Failed to compare files:\n{e}")
     def _get_plot_data(self) -> list:
         """Отримує дані для графіків з SimulationController."""
         if self.main_controller and hasattr(self.main_controller.neat, 'generation_statistics'):

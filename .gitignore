@@ -7,3 +7,5 @@ venv/pyvenv.cfg
 .vscode/settings.json
 project/saves/v1/
 debug_output_loop.txt
+genome.json
+genomes.json
