@@ -87,33 +87,79 @@ class NeatAlgorithm:
         print(f"Initial population created. Next innovation number: {innovation_manager.innovation_counter}")
         return population
 
+    def _get_next_genome_id(self) -> int: # Переконайтесь, що цей метод є
+        """Повертає наступний унікальний ID геному."""
+        return next(self._genome_id_counter)
+    
     def get_state_data(self) -> dict:
-        """Збирає дані для збереження стану NEAT."""
-        population_data = [genome.copy() for genome in self.population if genome]
-        species_data = [spec.get_state_data() for spec in self.species]
-        prev_gen_reps_data = {
-            spec_id: rep_genome.id 
-            for spec_id, rep_genome in self.species_representatives_prev_gen.items() 
-            if rep_genome # Переконуємось, що rep_genome існує
+        """Збирає дані для збереження стану NEAT, забезпечуючи консистентність."""
+        print("DEBUG SAVE: Entered get_state_data.")
+        
+        # Збираємо всі унікальні геноми, на які є посилання
+        relevant_genomes_map = {} # Використовуємо словник для унікальності за ID
+
+        # 1. Геноми з поточної популяції (це популяція для НАСТУПНОЇ генерації, P_N+1)
+        for g in self.population: # self.population тут - це вже next_population
+            if g and g.id not in relevant_genomes_map:
+                relevant_genomes_map[g.id] = g
+
+        # 2. Геноми з членів поточних видів (це види S_N, їх члени - з популяції P_N)
+        # Ці геноми можуть бути відсутні в self.population, якщо вони не пройшли у наступне покоління
+        for spec in self.species:
+            if spec:
+                if spec.representative and spec.representative.id not in relevant_genomes_map:
+                    relevant_genomes_map[spec.representative.id] = spec.representative
+                for member in spec.members:
+                    if member and member.id not in relevant_genomes_map:
+                        relevant_genomes_map[member.id] = member
+        
+        # 3. Геноми з представників попереднього покоління (використовувались для видоутворення S_N, самі з P_N-1)
+        for rep_genome in self.species_representatives_prev_gen.values():
+            if rep_genome and rep_genome.id not in relevant_genomes_map:
+                relevant_genomes_map[rep_genome.id] = rep_genome
+
+        # 4. Найкращий геном за весь час
+        if self.best_genome_overall and self.best_genome_overall.id not in relevant_genomes_map:
+            relevant_genomes_map[self.best_genome_overall.id] = self.best_genome_overall
+        
+        # Зберігаємо копії всіх цих релевантних геномів
+        # Це гарантує, що всі ID, на які посилатимуться species_data та prev_gen_reps, будуть доступні при завантаженні
+        all_referenced_genomes_copies = [g.copy() for g in relevant_genomes_map.values() if g]
+        print(f"DEBUG SAVE: Total unique relevant genomes to save in 'population_genomes': {len(all_referenced_genomes_copies)}")
+
+        # Дані про види (species_state_data) беруться з поточного self.species (S_N)
+        species_state_data_to_save = [spec.get_state_data() for spec in self.species if spec]
+        
+        # ID представників попереднього покоління (для видоутворення S_N)
+        prev_gen_reps_data_ids = {
+            spec_id: rep_g.id 
+            for spec_id, rep_g in self.species_representatives_prev_gen.items() 
+            if rep_g
         }
+
+        # Зберігаємо ID поточної популяції (P_N+1), щоб знати, яку популяцію активувати після завантаження
+        current_active_population_ids = [g.id for g in self.population if g]
+
         state = {
-            'generation': self.generation,
+            'generation': self.generation, # Поточна завершена генерація N
             'best_genome_overall': self.best_genome_overall.copy() if self.best_genome_overall else None,
             'innovation_manager_state': {
                 '_next_node_id': self.innovation_manager._next_node_id,
                 '_next_innovation_num': self.innovation_manager._next_innovation_num,
             },
-            'population_genomes': [genome.copy() for genome in self.population if genome],
-            'species_state_data': [spec.get_state_data() for spec in self.species if spec],
-            '_genome_id_counter_val': next(self._genome_id_counter) -1,
-            '_max_used_species_id': max(s.id for s in self.species if s) if any(s for s in self.species) else 0,
-            'species_representatives_prev_gen_ids': {
-                spec_id: rep_genome.id
-                for spec_id, rep_genome in self.species_representatives_prev_gen.items()
-                if rep_genome # Переконуємось, що rep_genome існує
-            },
-            'generation_statistics': self.generation_statistics # Зберігаємо історію статистики
+            # Це поле тепер містить ВСІ геноми, необхідні для відновлення стану (P_N+1, P_N, P_N-1)
+            'population_genomes': all_referenced_genomes_copies, 
+            # Зберігаємо ID активної популяції, яка має бути self.population після завантаження
+            'current_active_population_ids': current_active_population_ids,
+            'species_state_data': species_state_data_to_save, 
+            '_genome_id_counter_val': next(self._genome_id_counter) - 1,
+            '_max_used_species_id': max((s.id for s in self.species if s), default=0),
+            'species_representatives_prev_gen_ids': prev_gen_reps_data_ids,
+            'generation_statistics': self.generation_statistics
         }
+        print(f"DEBUG SAVE: Max species ID being saved: {state['_max_used_species_id']}")
+        print(f"DEBUG SAVE: Genome counter value being saved: {state['_genome_id_counter_val']}")
+        print(f"DEBUG SAVE: Saving {len(state['population_genomes'])} total genomes, {len(state['current_active_population_ids'])} active population genomes.")
         return state
 
     
@@ -123,69 +169,115 @@ class NeatAlgorithm:
         neat = cls(config, num_inputs, num_outputs, initial_genome_id_start=initial_genome_id_to_set, _is_loading=True)
 
         neat.generation = state_data['generation']
-        neat.best_genome_overall = state_data['best_genome_overall']
+        
+        best_genome_overall_data = state_data.get('best_genome_overall')
+        if best_genome_overall_data:
+            neat.best_genome_overall = best_genome_overall_data
+        else:
+            neat.best_genome_overall = None
 
         im_state = state_data['innovation_manager_state']
         neat.innovation_manager._next_node_id = im_state['_next_node_id']
         neat.innovation_manager._next_innovation_num = im_state['_next_innovation_num']
         neat.innovation_manager.reset_generation_history()
 
-        neat.population = state_data['population_genomes']
-        genomes_by_id = {genome.id: genome for genome in neat.population if genome}
+        # Завантажуємо ВСІ збережені геноми в загальну карту
+        all_loaded_genomes_list = state_data.get('population_genomes', [])
+        genomes_by_id = {genome.id: genome for genome in all_loaded_genomes_list if genome}
+        print(f"Info (Load): Loaded {len(all_loaded_genomes_list)} total genomes into master list. Genomes by ID map created with {len(genomes_by_id)} entries.")
+
+        # Відновлюємо АКТИВНУ популяцію (P_N+1)
+        current_active_population_ids = state_data.get('current_active_population_ids', [])
+        neat.population = [genomes_by_id[gid] for gid in current_active_population_ids if gid in genomes_by_id]
+        print(f"Info (Load): Reconstructed active population with {len(neat.population)} genomes.")
+
 
         max_loaded_species_id = state_data.get('_max_used_species_id', 0)
         Species._species_counter = itertools.count(max_loaded_species_id + 1)
+        print(f"Info (Load): Species ID counter reset to start from {max_loaded_species_id + 1}.")
         
         neat.species = []
         loaded_species_data = state_data.get('species_state_data', [])
+        print(f"Info (Load): Attempting to load {len(loaded_species_data)} species records.")
+
         for s_data in loaded_species_data:
-            # ... (логіка відновлення species_obj як раніше) ...
-            # Важливо: species_obj.representative буде встановлено на основі s_data['representative_id']
-            # з конструктора Species або подальшим присвоєнням.
+            species_id_from_data = s_data.get('id', 'Unknown_ID')
             representative_genome_obj = None
             rep_id = s_data.get('representative_id')
-            if rep_id is not None and rep_id in genomes_by_id:
-                representative_genome_obj = genomes_by_id[rep_id]
+            member_ids_from_data = s_data.get('member_ids', [])
             
-            if not representative_genome_obj and s_data.get('member_ids'):
-                first_member_id = s_data['member_ids'][0]
-                if first_member_id in genomes_by_id:
-                    representative_genome_obj = genomes_by_id[first_member_id]
-            
-            if not representative_genome_obj: 
-                print(f"Warning: Could not create species from data (ID: {s_data.get('id')}) due to missing representative in loaded population.")
-                continue
+            # print(f"Debug (Load): Processing species data for ID {species_id_from_data}. Rep ID: {rep_id}. Member IDs: {member_ids_from_data}")
 
-            species_obj = Species(representative_genome_obj)
-            species_obj.id = s_data['id']
-            species_obj.generations_since_improvement = s_data['generations_since_improvement']
-            species_obj.best_fitness_ever = s_data['best_fitness_ever']
+            if rep_id is not None:
+                representative_genome_obj = genomes_by_id.get(rep_id)
+                if not representative_genome_obj:
+                    print(f"Warning (Load): Representative genome with ID '{rep_id}' for species '{species_id_from_data}' not found in loaded master genomes list.")
+
+            if not representative_genome_obj and member_ids_from_data:
+                # print(f"Info (Load): Rep ID '{rep_id}' for species '{species_id_from_data}' not found or was None. Attempting to find representative from its members.")
+                for m_id_fallback in member_ids_from_data:
+                    fallback_rep_obj = genomes_by_id.get(m_id_fallback)
+                    if fallback_rep_obj:
+                        representative_genome_obj = fallback_rep_obj
+                        print(f"Info (Load): Using member ID '{m_id_fallback}' as representative for species '{species_id_from_data}'.")
+                        break 
+            
+            if not representative_genome_obj:
+                 print(f"Error (Load): Could not assign a representative for species ID '{species_id_from_data}'. Skipping this species.")
+                 continue
+
+            species_obj = Species(representative_genome_obj) 
+            species_obj.id = species_id_from_data 
+            species_obj.generations_since_improvement = s_data.get('generations_since_improvement', 0)
+            species_obj.best_fitness_ever = s_data.get('best_fitness_ever', 0.0)
             species_obj.offspring_count = s_data.get('offspring_count', 0)
             
-            species_obj.members = []
-            for member_id in s_data.get('member_ids', []):
-                if member_id in genomes_by_id:
-                    member_genome = genomes_by_id[member_id]
-                    species_obj.add_member(member_genome)
+            species_obj.clear_members() 
             
-            if species_obj.members:
-                # Переконуємось, що представник встановлений правильно
-                species_obj.representative = representative_genome_obj
-                neat.species.append(species_obj)
+            actually_added_members_count = 0
+            for member_id in member_ids_from_data:
+                member_genome = genomes_by_id.get(member_id)
+                if member_genome:
+                    species_obj.add_member(member_genome) 
+                    actually_added_members_count += 1
+                # else:
+                    # print(f"Warning (Load): Member genome with ID '{member_id}' for species '{species_obj.id}' not found in loaded master genomes list.") 
+            
+            if actually_added_members_count > 0:
+                # Представник вже встановлений конструктором Species як копія representative_genome_obj.
+                # Якщо потрібно, щоб представник був тим самим об'єктом, що і член популяції:
+                # found_rep_in_members = genomes_by_id.get(rep_id)
+                # if found_rep_in_members and found_rep_in_members in species_obj.members:
+                #    species_obj.representative = found_rep_in_members
+                # else:
+                #    # Залишаємо копію, або вибираємо нового, якщо старий не серед членів
+                #    if not any(m.id == species_obj.representative.id for m in species_obj.members) and species_obj.members:
+                #        species_obj.update_representative()
 
-        # Відновлюємо species_representatives_prev_gen
+
+                neat.species.append(species_obj)
+                # print(f"Info (Load): Successfully loaded species ID '{species_obj.id}' with {actually_added_members_count} members. Representative ID: {species_obj.representative.id if species_obj.representative else 'None'}.")
+            else:
+                print(f"Warning (Load): Species ID '{species_id_from_data}' was skipped because no valid members could be loaded from member_ids: {member_ids_from_data}.")
+        
+        print(f"Info (Load): Finished loading species. Total species loaded: {len(neat.species)}.")
+
         neat.species_representatives_prev_gen = {}
         prev_gen_reps_ids_data = state_data.get('species_representatives_prev_gen_ids', {})
-        for spec_id, rep_id in prev_gen_reps_ids_data.items():
-            if rep_id in genomes_by_id:
-                neat.species_representatives_prev_gen[spec_id] = genomes_by_id[rep_id]
-            else:
-                print(f"Warning: Could not find genome for saved representative ID {rep_id} of species {spec_id}")
+        # print(f"Info (Load): Attempting to load {len(prev_gen_reps_ids_data)} previous generation representatives.")
+        for spec_id, rep_id_prev in prev_gen_reps_ids_data.items():
+            rep_genome_prev = genomes_by_id.get(rep_id_prev)
+            if rep_genome_prev:
+                neat.species_representatives_prev_gen[spec_id] = rep_genome_prev
+            # else:
+                # print(f"Warning (Load): Could not find genome for saved previous representative ID '{rep_id_prev}' of species_id_key '{spec_id}'.")
+        # print(f"Info (Load): Loaded {len(neat.species_representatives_prev_gen)} previous generation representatives.")
         
         neat.generation_statistics = state_data.get('generation_statistics', [])
 
         print(f"NEAT state loaded. Gen: {neat.generation}, Pop: {len(neat.population)}, Species: {len(neat.species)}, PrevReps: {len(neat.species_representatives_prev_gen)}")
         return neat
+    
     def _speciate_population(self):
         """
         Розподіляє геноми по видах на основі генетичної відстані,

@@ -549,7 +549,7 @@ class SimulationController:
              return self.config.get('MAZE_SEED') # Повертаємо старий сід
 
     def save_simulation(self):
-        if self._is_running_multiple:
+        if self._is_running_multiple: # Перевірка, чи не запущений пакетний прогін
             messagebox.showwarning("Saving Denied", "Cannot save state while multiple generations are running. Please wait for completion or stop the batch process.")
             return
 
