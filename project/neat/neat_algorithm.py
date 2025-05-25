@@ -510,7 +510,7 @@ class NeatAlgorithm:
                          parent2 = random.choice(parents)
                          attempts += 1
                      g1_is_fitter = parent1.fitness > parent2.fitness
-                     child = Genome.crossover(parent1, parent2, g1_is_fitter)
+                     child = self._crossover_with_innovation_manager(parent1, parent2, g1_is_fitter)
                  else:
                      child = parent1.copy()
 
@@ -553,6 +553,22 @@ class NeatAlgorithm:
 
         return next_population
 
+    def _crossover_with_innovation_manager(self, parent1: Genome, parent2: Genome, g1_is_fitter: bool) -> Genome:
+        """Виконує кросовер з правильним innovation_manager."""
+        # Тимчасово зберігаємо innovation_manager в геномах
+        parent1._innovation_manager = self.innovation_manager
+        parent2._innovation_manager = self.innovation_manager
+        
+        # Виконуємо кросовер
+        child = Genome.crossover(parent1, parent2, g1_is_fitter)
+        
+        # Видаляємо тимчасові посилання
+        if hasattr(parent1, '_innovation_manager'):
+            delattr(parent1, '_innovation_manager')
+        if hasattr(parent2, '_innovation_manager'):
+            delattr(parent2, '_innovation_manager')
+        
+        return child
     def run_generation(self, evaluation_function): # evaluation_function тепер глобальна
         """Запускає один цикл покоління з паралельною оцінкою."""
         self.generation += 1
