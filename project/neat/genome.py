@@ -325,60 +325,152 @@ class Genome:
     # --- Метод кросоверу ---
     @staticmethod
     def crossover(genome1: 'Genome', genome2: 'Genome', g1_is_fitter: bool) -> 'Genome':
-        """Виконує кросовер між двома геномами."""
-        config = genome1.config # Беремо конфіг від першого батька
-        # Створюємо "порожнього" нащадка
-        child = Genome(f"c_{genome1.id}_{genome2.id}", 0, 0, config, InnovationManager())
-        child.nodes = {}
-        child.connections = {}
+        """Виконує кросовер між двома геномами згідно з правилами NEAT."""
+        config = genome1.config
+        
+        # ВАЖЛИВО: Для коректної роботи потрібно передати innovation_manager
+        # Тимчасове рішення - використовуємо заглушку, але в реальному коді
+        # innovation_manager має передаватися з NeatAlgorithm
+        innovation_manager = getattr(genome1, '_innovation_manager', None) or \
+                            getattr(genome2, '_innovation_manager', None) or \
+                            InnovationManager()
+        
+        # Створюємо нащадка
+        child = Genome(f"c_{genome1.id}_{genome2.id}", 
+                    len(genome1._input_node_ids), 
+                    len(genome1._output_node_ids), 
+                    config, 
+                    innovation_manager)
+        
+        # Очищаємо початкові структури
+        child.nodes.clear()
+        child.connections.clear()
+        
+        # КРОК 1: Копіюємо ВСІ базові вузли (input, output, bias)
+        # Це критично важливо - ці вузли завжди мають бути в геномі!
+        
+        # Копіюємо вхідні вузли
+        for node_id in genome1._input_node_ids:
+            if node_id in genome1.nodes:
+                child.nodes[node_id] = genome1.nodes[node_id].copy()
+            elif node_id in genome2.nodes:
+                child.nodes[node_id] = genome2.nodes[node_id].copy()
+        
+        # Копіюємо вихідні вузли
+        for node_id in genome1._output_node_ids:
+            if node_id in genome1.nodes:
+                child.nodes[node_id] = genome1.nodes[node_id].copy()
+            elif node_id in genome2.nodes:
+                child.nodes[node_id] = genome2.nodes[node_id].copy()
+        
+        # Копіюємо bias вузол
+        if genome1._bias_node_id is not None:
+            if genome1._bias_node_id in genome1.nodes:
+                child.nodes[genome1._bias_node_id] = genome1.nodes[genome1._bias_node_id].copy()
+            elif genome1._bias_node_id in genome2.nodes:
+                child.nodes[genome1._bias_node_id] = genome2.nodes[genome2._bias_node_id].copy()
+        
+        # Встановлюємо правильні списки ID
         child._input_node_ids = list(genome1._input_node_ids)
         child._output_node_ids = list(genome1._output_node_ids)
         child._bias_node_id = genome1._bias_node_id
-
-        # Копіюємо вузли від більш пристосованого батька
-        fitter_parent_nodes = genome1.nodes if g1_is_fitter else genome2.nodes
-        for node_id, node_gene in fitter_parent_nodes.items():
-            child.add_node(node_gene.copy())
-        # Опціонально: додати вузли, які є у менш пристосованого, але відсутні у кращого
-        # less_fit_parent_nodes = genome2.nodes if g1_is_fitter else genome1.nodes
-        # for node_id, node_gene in less_fit_parent_nodes.items():
-        #     if node_id not in child.nodes:
-        #         child.add_node(node_gene.copy())
-
-        # Комбінуємо з'єднання
+        
+        # КРОК 2: Визначаємо діапазони інновацій для правильної класифікації генів
         innovs1 = set(genome1.connections.keys())
         innovs2 = set(genome2.connections.keys())
-        matching_innovs = innovs1.intersection(innovs2) # Спільні інновації
-
-        # Успадковуємо відповідні (matching) гени
-        for innov in sorted(list(matching_innovs)):
+        
+        # Максимальні інноваційні номери для кожного батька
+        max_innov1 = max(innovs1) if innovs1 else 0
+        max_innov2 = max(innovs2) if innovs2 else 0
+        
+        # КРОК 3: Класифікуємо гени згідно з оригінальним NEAT paper
+        # Matching: гени з однаковими інноваційними номерами
+        matching = innovs1.intersection(innovs2)
+        
+        # Disjoint: гени в межах діапазону іншого батька, але відсутні в ньому
+        disjoint1 = {i for i in innovs1 if i not in innovs2 and i <= max_innov2}
+        disjoint2 = {i for i in innovs2 if i not in innovs1 and i <= max_innov1}
+        
+        # Excess: гени поза діапазоном іншого батька
+        excess1 = {i for i in innovs1 if i not in innovs2 and i > max_innov2}
+        excess2 = {i for i in innovs2 if i not in innovs1 and i > max_innov1}
+        
+        # КРОК 4: Успадковуємо з'єднання згідно з правилами NEAT
+        
+        # 4.1: Matching гени - випадково від одного з батьків
+        for innov in matching:
             conn1 = genome1.connections[innov]
             conn2 = genome2.connections[innov]
-            # Вибираємо випадково від одного з батьків
+            
+            # Випадково вибираємо від якого батька успадкувати
             chosen_conn = random.choice([conn1, conn2]).copy()
-            # Перевіряємо успадкування вимкненого стану
-            disable_prob = config.get('INHERIT_DISABLED_GENE_RATE', 0.75)
+            
+            # Перевіряємо вимкнений стан
+            # Якщо хоча б в одного батька ген вимкнений, є шанс що він буде вимкнений у нащадка
             if not conn1.enabled or not conn2.enabled:
-                 # Якщо хоча б у одного вимкнено, є шанс успадкувати вимкнений стан
-                 chosen_conn.enabled = (random.random() >= disable_prob)
+                disable_prob = config.get('INHERIT_DISABLED_GENE_RATE', 0.75)
+                chosen_conn.enabled = (random.random() >= disable_prob)
             else:
-                 chosen_conn.enabled = True # Якщо в обох увімкнено, залишаємо увімкненим
+                chosen_conn.enabled = True
+            
             child.add_connection(chosen_conn)
-
-        # Успадковуємо роз'єднані (disjoint) та надлишкові (excess) гени
-        # Тільки від БІЛЬШ пристосованого батька
-        disjoint_excess_innovs = (innovs1 - innovs2) if g1_is_fitter else (innovs2 - innovs1)
-        fitter_parent_conns = genome1.connections if g1_is_fitter else genome2.connections
-
-        for innov in sorted(list(disjoint_excess_innovs)):
-             # Перевіряємо, чи ця інновація дійсно належить кращому батькові
-            if innov in fitter_parent_conns:
-                child.add_connection(fitter_parent_conns[innov].copy())
-
-        # Присвоюємо нащадку атрибути (можливо, ID краще генерувати в NeatAlgorithm)
-        child.id = f"c_{genome1.id}_{genome2.id}" # Тимчасовий ID
-        child.species_id = None # Нащадок ще не належить до виду
-
+        
+        # 4.2: Disjoint та Excess гени - від більш пристосованого батька
+        if g1_is_fitter:
+            # Якщо перший батько кращий, беремо його disjoint та excess гени
+            for innov in disjoint1.union(excess1):
+                child.add_connection(genome1.connections[innov].copy())
+        else:
+            # Якщо другий батько кращий, беремо його disjoint та excess гени
+            for innov in disjoint2.union(excess2):
+                child.add_connection(genome2.connections[innov].copy())
+        
+        # 4.3: Особливий випадок - однаковий фітнес
+        # Згідно з NEAT paper, при однаковому фітнесі disjoint/excess 
+        # успадковуються випадково від обох батьків
+        if genome1.fitness == genome2.fitness:
+            # Збираємо всі disjoint та excess гени від обох батьків
+            all_disjoint_excess = list(disjoint1.union(excess1).union(disjoint2.union(excess2)))
+            
+            # Для кожного гена випадково вирішуємо чи включати його
+            for innov in all_disjoint_excess:
+                if random.random() < 0.5:  # 50% шанс включення
+                    if innov in genome1.connections:
+                        child.add_connection(genome1.connections[innov].copy())
+                    elif innov in genome2.connections:
+                        child.add_connection(genome2.connections[innov].copy())
+        
+        # КРОК 5: Додаємо приховані вузли, які використовуються в успадкованих з'єднаннях
+        required_nodes = set()
+        for conn in child.connections.values():
+            required_nodes.add(conn.in_node_id)
+            required_nodes.add(conn.out_node_id)
+        
+        # Видаляємо базові вузли (вони вже додані)
+        base_nodes = set(child._input_node_ids) | set(child._output_node_ids)
+        if child._bias_node_id is not None:
+            base_nodes.add(child._bias_node_id)
+        
+        hidden_nodes_to_add = required_nodes - base_nodes
+        
+        # Додаємо приховані вузли
+        for node_id in hidden_nodes_to_add:
+            if node_id not in child.nodes:  # Перевіряємо чи вже не додано
+                # Спочатку шукаємо в більш пристосованого батька
+                if g1_is_fitter and node_id in genome1.nodes:
+                    child.add_node(genome1.nodes[node_id].copy())
+                elif not g1_is_fitter and node_id in genome2.nodes:
+                    child.add_node(genome2.nodes[node_id].copy())
+                # Якщо не знайшли у пріоритетного, шукаємо в іншого
+                elif node_id in genome1.nodes:
+                    child.add_node(genome1.nodes[node_id].copy())
+                elif node_id in genome2.nodes:
+                    child.add_node(genome2.nodes[node_id].copy())
+        
+        # Присвоюємо ID та species_id
+        child.id = f"c_{genome1.id}_{genome2.id}"  # Тимчасовий ID
+        child.species_id = None  # Нащадок ще не належить до виду
+        
         return child
 
     # --- Метод розрахунку відстані ---
