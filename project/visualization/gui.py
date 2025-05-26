@@ -440,25 +440,65 @@ class MazeGUI:
 
     def _create_control_widgets(self, parent_frame):
         """Створює віджети на панелі керування."""
+        # 1. --- Create Canvas and Scrollbar ---
+        # --- THIS IS THE FIX ---
+        # Configure the grid of the parent_frame (the control_frame) itself.
+        # This makes its first row and column expand to fill the available space.
+        parent_frame.grid_rowconfigure(0, weight=1)
         parent_frame.grid_columnconfigure(0, weight=1)
+        # --- END OF FIX ---
+
+        # 1. --- Create Canvas and Scrollbar ---
+        canvas = tk.Canvas(parent_frame, borderwidth=0, highlightthickness=0) # Added highlightthickness=0
+        scrollbar = ttk.Scrollbar(parent_frame, orient="vertical", command=canvas.yview)
+        # Add padding directly to the frame that holds the content. This is the correct place for it.
+        scrollable_frame = ttk.Frame(canvas, padding=(5, 5)) 
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # This binding updates the scrollregion when the size of the inner frame changes.
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        # --- NEW AND IMPORTANT PART ---
+        # This part makes the inner frame resize horizontally with the canvas.
+        # 1. Create the window and save its ID.
+        scrollable_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        # 2. Create a function that resizes the inner frame to the canvas width.
+        def _configure_scrollable_window(event):
+            canvas.itemconfig(scrollable_window, width=event.width)
+
+        # 3. Bind that function to the canvas's <Configure> event.
+        canvas.bind("<Configure>", _configure_scrollable_window)
+        # --- END OF NEW PART ---
+
+        canvas.grid(row=0, column=0, sticky="nswe") # The reverted line from Step 1
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # --- From here on, all widgets are parented to 'scrollable_frame' ---
+        
+        scrollable_frame.grid_columnconfigure(0, weight=1)
         current_row = 0
 
          # --- Керування Симуляцією ---
-        sim_control_frame = ttk.LabelFrame(parent_frame, text="Simulation Control", padding=(5, 5))
+        
+        sim_control_frame = ttk.LabelFrame(scrollable_frame, text="Simulation Control", padding=(5, 5))
         sim_control_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
-        sim_control_frame.columnconfigure(0, weight=1) # Розтягуємо колонк
-        self.start_pause_button = ttk.Button(sim_control_frame, text="Start Viz", command=self._on_start_pause) # Перейменував для ясності
+        sim_control_frame.columnconfigure(0, weight=1)
+        self.start_pause_button = ttk.Button(sim_control_frame, text="Start Viz", command=self._on_start_pause)
         self.start_pause_button.grid(row=0, column=0, sticky="ew", pady=2)
         self.next_gen_button = ttk.Button(sim_control_frame, text="Next Generation", command=self._on_next_generation, state=tk.NORMAL)
         self.next_gen_button.grid(row=1, column=0, sticky="ew", pady=2)
         
-        # --- Додаємо запуск N поколінь ---
         run_n_frame = ttk.Frame(sim_control_frame)
         run_n_frame.grid(row=2, column=0, sticky="ew", pady=(5, 2))
-        run_n_frame.columnconfigure(1, weight=1) # Розтягуємо поле вводу
+        run_n_frame.columnconfigure(1, weight=1)
 
         ttk.Label(run_n_frame, text="Run").grid(row=0, column=0, padx=(0, 2))
-        self.num_gens_var = tk.StringVar(value="50") # Значення за замовчуванням
+        self.num_gens_var = tk.StringVar(value="50")
         self.num_gens_entry = ttk.Entry(run_n_frame, textvariable=self.num_gens_var, width=5)
         self.num_gens_entry.grid(row=0, column=1, padx=(0, 2), sticky="ew")
         ttk.Label(run_n_frame, text="Gens").grid(row=0, column=2, padx=(0, 5))
@@ -466,10 +506,10 @@ class MazeGUI:
         self.run_n_button.grid(row=0, column=3)
 
         self.reset_button = ttk.Button(sim_control_frame, text="Reset Simulation", command=self._on_reset)
-        self.reset_button.grid(row=3, column=0, sticky="ew", pady=2) # Змістили Reset вниз
+        self.reset_button.grid(row=3, column=0, sticky="ew", pady=2)
 
         # --- Налаштування Лабіринту ---
-        settings_frame = ttk.LabelFrame(parent_frame, text="Maze Settings", padding=(5, 5))
+        settings_frame = ttk.LabelFrame(scrollable_frame, text="Maze Settings", padding=(5, 5))
         settings_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
         settings_frame.columnconfigure(1, weight=1)
         ttk.Label(settings_frame, text="Maze Seed:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
@@ -479,10 +519,9 @@ class MazeGUI:
         self.seed_entry.grid(row=0, column=1, sticky="ew", padx=2, pady=2)
         self.new_maze_button = ttk.Button(settings_frame, text="Generate New Maze", command=self._on_new_maze)
         self.new_maze_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
-
         
         # --- Статистика ---
-        stats_frame = ttk.LabelFrame(parent_frame, text="Statistics", padding=(5, 5))
+        stats_frame = ttk.LabelFrame(scrollable_frame, text="Statistics", padding=(5, 5))
         stats_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
         stats_frame.columnconfigure(0, weight=1)
         self.gen_label = ttk.Label(stats_frame, text="Generation: 0")
@@ -496,28 +535,19 @@ class MazeGUI:
         self.best_overall_fitness_label = ttk.Label(stats_frame, text="Best Fitness (Overall): N/A")
         self.best_overall_fitness_label.pack(anchor=tk.W)
 
-
-        children_rows = [child.grid_info()['row'] for child in parent_frame.winfo_children() if child.grid_info()]
-        current_row = max(children_rows) + 1 if children_rows else 0
-
-
-        save_load_frame = ttk.LabelFrame(parent_frame, text="Save/Load Training", padding=(5, 5))
-        # Розміщуємо ПІСЛЯ статистики, АЛЕ ПЕРЕД візуалізацією мережі
-        # Змінимо порядок: спочатку Save/Load, потім Network Topology
-        save_load_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5)
-        current_row +=1 # Наступний віджет буде нижче
-
+         # --- Save/Load Training ---
+        save_load_frame = ttk.LabelFrame(scrollable_frame, text="Save/Load Training", padding=(5, 5))
+        save_load_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
         save_load_frame.columnconfigure(0, weight=1)
         save_load_frame.columnconfigure(1, weight=1)
 
         self.save_button = ttk.Button(save_load_frame, text="Save State", command=self._on_save_simulation)
         self.save_button.grid(row=0, column=0, sticky="ew", padx=(0,2), pady=2)
-
         self.load_button = ttk.Button(save_load_frame, text="Load State", command=self._on_load_simulation)
         self.load_button.grid(row=0, column=1, sticky="ew", padx=(2,0), pady=2)
         # --- Налаштування Візуалізації (сенсори) ---
         # Створюємо цей фрейм ПЕРЕД network_frame, якщо він має бути над ним
-        viz_settings_frame = ttk.LabelFrame(parent_frame, text="Visualization Settings", padding=(5,5))
+        viz_settings_frame = ttk.LabelFrame(scrollable_frame, text="Visualization Settings", padding=(5,5))
         viz_settings_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
         
         self.show_sensors_var = tk.BooleanVar(value=False)
@@ -526,9 +556,9 @@ class MazeGUI:
                                                   command=self._on_toggle_show_sensors)
         self.show_sensors_check.pack(anchor=tk.W, padx=5, pady=2)
         # --- Відображення Топології ---
-        self.network_frame = ttk.LabelFrame(parent_frame, text="Network Topology", padding=(5, 5))
+        self.network_frame = ttk.LabelFrame(scrollable_frame, text="Network Topology", padding=(5, 5))
         self.network_frame.grid(row=current_row, column=0, sticky="nsew", padx=5, pady=5)
-        parent_frame.grid_rowconfigure(current_row, weight=1)
+        scrollable_frame.grid_rowconfigure(current_row, weight=1)
         current_row += 1
 
         self.network_canvas = tk.Canvas(self.network_frame, bg=COLOR_BACKGROUND, bd=0, highlightthickness=0)
