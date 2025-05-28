@@ -467,8 +467,8 @@ class NeatAlgorithm:
         prob_crossover = self.config.get('CROSSOVER_RATE', 0.75)
         elitism_count = self.config.get('ELITISM', 1)
 
-        self._handle_stagnation()
-        num_offspring_map = self._determine_num_offspring()
+        self._handle_stagnation() # забираємо стагнуючі види з пулу для розмноження
+        num_offspring_map = self._determine_num_offspring() 
 
         if not self.species:
              print("Error: No species left to reproduce. Resetting population.")
@@ -649,6 +649,11 @@ class NeatAlgorithm:
         self._update_previous_gen_representatives() # <--- ВАЖЛИВО
 
         self._speciate_population() # Тепер використовує self.species_representatives_prev_gen
+        # >>> ВАЖЛИВЕ ДОДАВАННЯ: Сортуємо членів кожного виду ПІСЛЯ видоутворення <<<
+        for spec in self.species:
+            if spec.members: # Перевірка, чи є члени для сортування
+                spec.sort_members_by_fitness()
+        # >>> КІНЕЦЬ ДОДАВАННЯ <<<
         self._calculate_adjusted_fitness()
         next_population = self._reproduce()
         self.population = next_population
