@@ -177,27 +177,23 @@ class SimulationController:
                 2 +  # heading_vector (x, y)
                 1    # current_velocity_reading
             )
-            # --- ЗЧИТУВАННЯ ОНОВЛЕНОГО NUM_OUTPUTS ---
-            num_outputs = self.config['NUM_OUTPUTS'] # Зчитає 4 з конфігу
-            # ------------------------------------------
-            print(f"Network configuration: {num_inputs} Inputs, {num_outputs} Outputs") # Debug
+            num_outputs = self.config['NUM_OUTPUTS']
+            print(f"Network configuration: {num_inputs} Inputs, {num_outputs} Outputs") 
         except KeyError as e:
              print(f"FATAL ERROR: Missing configuration key needed for NN setup: {e}")
              master.quit()
              return
 
         self.config['NUM_INPUTS'] = num_inputs
-        # Передаємо 0 для initial_genome_id_start, бо NeatAlgorithm сам керує лічильником
         self.neat = NeatAlgorithm(self.config, num_inputs, num_outputs, initial_genome_id_start=0)
-        # self.config['num_outputs'] = num_outputs # Вже завантажено
-
-        # Ініціалізація компонентів
-        #self.neat = NeatAlgorithm(self.config, num_inputs, num_outputs) # Передаємо обчислені значення
+        
+        # Ініціалізація лабіринту - self.config.get('MAZE_SEED') використовується тут
         self.maze = Maze(self.config['MAZE_WIDTH'], self.config['MAZE_HEIGHT'], self.config.get('MAZE_SEED'))
-        self.config['MAZE_SEED'] = self.maze.seed # Зберігаємо фактичний сід в конфіг
-        self.agents = {} # Словник {genome_id: Agent}
+        self.config['MAZE_SEED'] = self.maze.seed # Зберігаємо фактичний сід (випадковий чи заданий) в конфіг
 
-        # Ініціалізація GUI
+        self.agents = {} 
+
+        # Ініціалізація GUI - передаємо конфіг, що вже містить актуальний MAZE_SEED
         self.gui = MazeGUI(master, self.config, self)
 
         # Стан для керування виконанням багатьох поколінь
@@ -526,9 +522,8 @@ class SimulationController:
     def generate_new_maze(self, seed=None) -> int | None:
         """Генерує новий лабіринт і оновлює GUI."""
         print(f"Generating new maze with seed: {seed}")
-        self.config['MAZE_SEED'] = seed # Зберігаємо бажаний сід
+        self.config['MAZE_SEED'] = seed # Зберігаємо бажаний сід (може бути None)
         try:
-              # --- Перевірка розмірів перед генерацією ---
              w = self.config['MAZE_WIDTH']
              h = self.config['MAZE_HEIGHT']
              if w % 2 == 0: w += 1; print(f"Adjusted MAZE_WIDTH to {w} (must be odd)")
@@ -536,17 +531,19 @@ class SimulationController:
              w = max(5, w); h = max(5, h)
              self.config['MAZE_WIDTH'] = w
              self.config['MAZE_HEIGHT'] = h
-             # ------------------------------------------
-             self.maze = Maze(w, h, seed)
-             self.config['MAZE_SEED'] = self.maze.seed
+             
+             self.maze = Maze(w, h, self.config['MAZE_SEED']) # Передаємо збережений/новий сід
+             self.config['MAZE_SEED'] = self.maze.seed # Зберігаємо фактичний сід, використаний Maze
+             
              self._redraw_maze()
-             self._reset_agents_for_visualization() # Важливо після нової сітки
+             self._reset_agents_for_visualization() 
              self._update_agents_visuals()
              self.gui.update_gui()
-             return self.maze.seed
+             return self.maze.seed # Повертаємо фактичний сід
         except ValueError as e:
              messagebox.showerror("Maze Generation Error", f"Failed to generate maze: {e}\nCheck MAZE_WIDTH/MAZE_HEIGHT in config (must be odd >= 5).")
-             return self.config.get('MAZE_SEED') # Повертаємо старий сід
+             return self.config.get('MAZE_SEED') # Повертаємо старий сід у разі помилки
+
 
     def save_simulation(self):
         if self._is_running_multiple: # Перевірка, чи не запущений пакетний прогін
@@ -593,6 +590,7 @@ class SimulationController:
                 from neat.innovation import InnovationManager
                 from neat.species import Species
                 
+                # NEATJSONSerializer.load_neat_state оновить self.config
                 self.neat = NEATJSONSerializer.load_neat_state(
                     filepath,
                     self.config,
@@ -603,18 +601,13 @@ class SimulationController:
                     Species,
                     InnovationManager
                 )
+                # self.config['MAZE_SEED'] тепер має бути оновлено з файлу
                 
-                # Оновлюємо GUI seed якщо доступний
-                if hasattr(self.gui, 'seed_var'):
-                    self.gui.seed_var.set(str(self.config.get('MAZE_SEED', '')))
-                
-                # Генеруємо лабіринт з збереженим сідом
                 maze_seed = self.config.get('MAZE_SEED')
                 self.maze = Maze(self.config['MAZE_WIDTH'], self.config['MAZE_HEIGHT'], maze_seed)
                 self._redraw_maze()
                 
-            else:
-                # Старий формат pickle (для сумісності)
+            else: # Старий формат pickle
                 with open(filepath, 'rb') as f:
                     simulation_data = pickle.load(f)
 
@@ -625,16 +618,14 @@ class SimulationController:
                 if loaded_config:
                     # Оновлюємо поточний конфіг, але зберігаємо деякі runtime налаштування
                     num_processes_current = self.config.get('NUM_PROCESSES')
-                    self.config.update(loaded_config)
+                    self.config.update(loaded_config) # Оновлюємо self.config
                     self.config['NUM_PROCESSES'] = num_processes_current
-                    # Оновлюємо GUI seed якщо доступний
-                    if hasattr(self.gui, 'seed_var'):
-                        self.gui.seed_var.set(str(self.config.get('MAZE_SEED', '')))
                 else:
                     print("Warning: No config found in save file. Using current config.")
 
-                maze_seed = simulation_data.get('maze_seed', self.config.get('MAZE_SEED'))
-                # Перевіряємо та виправляємо розміри лабіринту з конфігу перед генерацією
+                # self.config['MAZE_SEED'] має бути оновлено тут, якщо був у loaded_config
+                maze_seed = self.config.get('MAZE_SEED') # Беремо з оновленого self.config
+                
                 w = self.config.get('MAZE_WIDTH', 11)
                 h = self.config.get('MAZE_HEIGHT', 11)
                 if w % 2 == 0: w += 1
@@ -642,24 +633,21 @@ class SimulationController:
                 w = max(5, w); h = max(5, h)
                 self.config['MAZE_WIDTH'] = w
                 self.config['MAZE_HEIGHT'] = h
-                self.maze = Maze(w, h, maze_seed) # Генеруємо лабіринт
+                self.maze = Maze(w, h, maze_seed) 
                 self.config['MAZE_SEED'] = self.maze.seed # Зберігаємо фактичний сід
                 self._redraw_maze()
 
                 neat_state_data = simulation_data.get('neat_algorithm_state')
-                # Беремо num_inputs/outputs зі збереженого файлу, якщо є, інакше з поточного конфігу
-                num_inputs = simulation_data.get('num_inputs_for_neat', self.config['NUM_INPUTS'])
-                num_outputs = simulation_data.get('num_outputs_for_neat', self.config['NUM_OUTPUTS'])
-                self.config['NUM_INPUTS'] = num_inputs # Оновлюємо конфіг, якщо значення змінились
-                self.config['NUM_OUTPUTS'] = num_outputs
+                num_inputs = self.config['NUM_INPUTS'] 
+                num_outputs = self.config['NUM_OUTPUTS']
 
                 if neat_state_data:
-                    # Передаємо оновлений self.config
                     self.neat = NeatAlgorithm.load_from_state_data(neat_state_data, self.config, num_inputs, num_outputs)
                 else:
                     messagebox.showerror("Load Error", "NEAT algorithm data not found in save file.")
                     return
                 
+            # GUI оновить свій seed_var в _on_load_simulation, прочитавши self.config
             self._update_gui_stats()
             self._reset_agents_for_visualization()
             self._update_agents_visuals()
@@ -667,7 +655,7 @@ class SimulationController:
             self.gui.update_gui()
 
             messagebox.showinfo("Success", f"Simulation state loaded from {os.path.basename(filepath)}")
-            print(f"Simulation loaded. Current generation: {self.neat.generation}")
+            print(f"Simulation loaded. Current generation: {self.neat.generation}, Maze Seed: {self.config.get('MAZE_SEED')}")
 
         except FileNotFoundError:
             messagebox.showerror("Load Error", f"Save file not found: {filepath}")
@@ -680,23 +668,25 @@ class SimulationController:
         """Скидає симуляцію NEAT до початкового стану."""
         print("Resetting NEAT simulation...")
         try:
-            self.config = self._load_config()
-            self.config['NUM_PROCESSES'] = os.cpu_count() # Оновлюємо к-сть процесів
+            self.config = self._load_config() # Завантажуємо свіжий конфіг з файлу
+            self.config['NUM_PROCESSES'] = os.cpu_count() 
             num_inputs = (self.config['NUM_RANGEFINDERS'] + self.config['NUM_RADAR_SLICES'] + 2 + 1)
             num_outputs = self.config['NUM_OUTPUTS']
             self.config['NUM_INPUTS'] = num_inputs
 
-            self.neat = NeatAlgorithm(self.config, num_inputs, num_outputs) # Новий NEAT
-            new_seed = self.generate_new_maze(self.config.get('MAZE_SEED')) # Новий лабіринт
+            self.neat = NeatAlgorithm(self.config, num_inputs, num_outputs) 
+            
+            # generate_new_maze використає self.config.get('MAZE_SEED') з щойно завантаженого конфігу
+            # і оновить self.config['MAZE_SEED'] фактичним сідом.
+            self.generate_new_maze(self.config.get('MAZE_SEED')) 
 
             self._update_gui_stats() # Оновлюємо статистику та візуалізацію мережі
             # _reset_agents_for_visualization() та _update_agents_visuals() викликаються в generate_new_maze
             self.gui.update_gui()
-            print("Simulation reset complete.")
+            print(f"Simulation reset complete. Maze Seed: {self.config.get('MAZE_SEED')}")
         except Exception as e:
             print(f"FATAL ERROR during reset: {e}")
             messagebox.showerror("Reset Error", f"Could not reset simulation: {e}")
-
 
 
 # --- Точка входу ---

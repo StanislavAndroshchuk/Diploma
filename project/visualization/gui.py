@@ -10,12 +10,12 @@ from PIL import Image, ImageTk, ImageDraw
 from typing import Optional, TYPE_CHECKING
 import pandas as pd  # Для _plot_complexity_analysis
 from neat.json_serializer import NEATJSONSerializer  # Для _export_current_data
-from neat.data_analyzer import NEATDataAnalyzer 
+from neat.data_analyzer import NEATDataAnalyzer
 import threading
 # --- Імпорт для type hinting без циклічних залежностей ---
 if TYPE_CHECKING:
-    from project.neat.genome import Genome
-    from project.main import SimulationController
+    from project.neat.genome import Genome # type: ignore
+    from project.main import SimulationController # type: ignore # Змінено для уникнення конфлікту з project.main
 
 # --- Імпортуємо візуалізатор та константи ---
 try:
@@ -98,7 +98,7 @@ class MazeGUI:
         """
         self.master = master
         self.main_controller = main_controller
-        self.config = config
+        self.config = config # config вже містить актуальний MAZE_SEED з SimulationController
         self.master.title("NEAT Maze Navigation")
 
         self._cell_size = config.get('CELL_SIZE_PX', 20)
@@ -136,6 +136,7 @@ class MazeGUI:
         self._network_drag_start_x = 0
         self._network_drag_start_y = 0
         # --- Віджети на панелі керування ---
+        # self.seed_var буде створено всередині _create_control_widgets
         self._create_control_widgets(self.control_frame)
         # Одразу оновимо візуалізацію мережі при старті
         self.update_network_visualization()
@@ -511,12 +512,16 @@ class MazeGUI:
         # --- Налаштування Лабіринту ---
         settings_frame = ttk.LabelFrame(scrollable_frame, text="Maze Settings", padding=(5, 5))
         settings_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
-        settings_frame.columnconfigure(1, weight=1)
+        settings_frame.columnconfigure(1, weight=1) # Дозволяємо полю вводу розширюватись
+
         ttk.Label(settings_frame, text="Maze Seed:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
-        initial_seed = self.config.get("MAZE_SEED", "")
-        self.seed_var = tk.StringVar(value=str(initial_seed) if initial_seed is not None else "")
+        # self.config тут - це конфіг, переданий в MazeGUI при ініціалізації,
+        # який вже містить фактичний сід першого лабіринту з SimulationController
+        initial_seed_value = self.config.get("MAZE_SEED", "")
+        self.seed_var = tk.StringVar(value=str(initial_seed_value) if initial_seed_value is not None else "")
         self.seed_entry = ttk.Entry(settings_frame, textvariable=self.seed_var, width=15)
         self.seed_entry.grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+
         self.new_maze_button = ttk.Button(settings_frame, text="Generate New Maze", command=self._on_new_maze)
         self.new_maze_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
         
@@ -600,7 +605,7 @@ class MazeGUI:
         if self.main_controller:
             if self.is_running: # Зупиняємо візуалізацію перед збереженням
                 self.is_running = False
-                self.set_controls_state(False) # Оновлюємо стан кнопок
+                self.set_controls_state(False, running_multiple=self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False) # Оновлюємо стан кнопок
                 # self.main_controller.toggle_simulation(False) # Повідомляємо контролер
             self.main_controller.save_simulation()
 
@@ -610,10 +615,16 @@ class MazeGUI:
                 self.is_running = False
                 self.set_controls_state(False)
                 # self.main_controller.toggle_simulation(False)
-            self.main_controller.load_simulation()
-            # Оновлюємо сід в GUI після завантаження
+            
+            self.main_controller.load_simulation() # Цей метод оновить config в main_controller
+
+            # Оновлюємо сід в GUI після завантаження, беручи його з оновленого config контролера
             if hasattr(self.main_controller, 'config') and 'MAZE_SEED' in self.main_controller.config:
-                self.seed_var.set(str(self.main_controller.config['MAZE_SEED']))
+                loaded_seed = self.main_controller.config.get('MAZE_SEED')
+                self.seed_var.set(str(loaded_seed) if loaded_seed is not None else "")
+            else:
+                 self.seed_var.set("") # Якщо сіда немає
+
             # Оновлюємо візуалізацію мережі, щоб показати завантажений геном
             self.update_network_visualization()
     # --- Обробники подій для зуму та панорамування ---
@@ -1023,48 +1034,67 @@ class MazeGUI:
     def _on_start_pause(self):
         if self.main_controller:
             self.is_running = not self.is_running
-            self.set_controls_state(self.is_running)
+            self.set_controls_state(self.is_running, 
+                                    running_multiple=self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False)
             self.main_controller.toggle_simulation(self.is_running)
         else: print("Error: Main controller missing.")
 
     def _on_next_generation(self):
         if not self.is_running and self.main_controller:
-            self.set_controls_state(True)
+            # Використовуємо поточний стан _is_running_multiple з контролера
+            is_batch_running = self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False
+            self.set_controls_state(True, running_multiple=is_batch_running) # Блокуємо на час виконання
             self.master.update()
             try:
                 self.main_controller.run_one_generation()
                 # ОНОВЛЮЄМО ВІЗУАЛІЗАЦІЮ ПІСЛЯ ГЕНЕРАЦІЇ
                 self.update_network_visualization() # Покаже найкращий за замовчуванням
             finally:
-                self.set_controls_state(False)
+                # Розблоковуємо, тільки якщо не йде batch run
+                self.set_controls_state(False, running_multiple=is_batch_running)
         elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_new_maze(self):
          if not self.is_running and self.main_controller:
             seed_str = self.seed_var.get().strip()
             seed = None
-            if seed_str:
-                try: seed = int(seed_str)
+            if seed_str: # Якщо щось введено
+                try:
+                    seed = int(seed_str)
                 except ValueError:
                     messagebox.showerror("Invalid Seed", f"Cannot parse seed: '{seed_str}'. Using random.")
-                    self.seed_var.set("")
-            new_seed = self.main_controller.generate_new_maze(seed)
-            if new_seed is not None: self.seed_var.set(str(new_seed))
+                    self.seed_var.set("") # Очищаємо невалідний ввід
+            
+            # Викликаємо метод контролера для генерації нового лабіринту
+            new_seed_used = self.main_controller.generate_new_maze(seed)
+            
+            # Оновлюємо поле сіда в GUI фактично використаним сідом
+            if new_seed_used is not None:
+                self.seed_var.set(str(new_seed_used))
+            # Якщо new_seed_used is None (мало б не статися), поле seed_var вже очищене або містить старе значення
+                 
          elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_reset(self):
         if not self.is_running and self.main_controller:
              if messagebox.askyesno("Confirm Reset", "Reset NEAT simulation to generation 0?"):
-                self.set_controls_state(True)
+                # Використовуємо поточний стан _is_running_multiple з контролера
+                is_batch_running = self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False
+                self.set_controls_state(True, running_multiple=is_batch_running) # Блокуємо на час скидання
                 self.master.update()
                 try:
-                    self.main_controller.reset_simulation()
-                    new_seed = self.config.get('MAZE_SEED', '')
-                    self.seed_var.set(str(new_seed) if new_seed is not None else "")
+                    self.main_controller.reset_simulation() # Цей метод оновить config контролера
+                    
+                    # Оновлюємо поле сіда в GUI з config контролера
+                    # self.config в GUI може бути не актуальним, якщо reset_simulation його перезавантажує
+                    new_seed_from_controller = self.main_controller.config.get('MAZE_SEED', '')
+                    self.seed_var.set(str(new_seed_from_controller) if new_seed_from_controller is not None else "")
+                    
                     # ОНОВЛЮЄМО ВІЗУАЛІЗАЦІЮ ПІСЛЯ СКИДАННЯ
                     self.update_network_visualization() # Покаже випадковий геном
                 finally:
-                    self.set_controls_state(False)
+                    # Розблоковуємо, тільки якщо не йде batch run
+                    self.set_controls_state(False, running_multiple=is_batch_running)
         elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_visualize_genome_id(self):
