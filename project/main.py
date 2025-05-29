@@ -62,72 +62,71 @@ def calculate_fitness(agent: Agent, maze: Maze, max_steps: int) -> float:
 
     return max(0.001, fitness) # Фітнес трохи більший за 0, щоб уникнути ділення на 0 у NEAT
 
-def evaluate_single_genome(genome_tuple: Tuple[int, Genome], config: dict) -> Tuple[int, float]:
+def evaluate_single_genome(genome_tuple: Tuple[int, Genome], config: dict) -> Tuple[int, float, bool]:
     """
     Оцінює ОДИН геном. Приймає кортеж (id, genome) та конфіг.
-    Повертає кортеж (id, fitness).
-    Важливо: ця функція виконуватиметься в окремому процесі,
-    тому не може напряму змінювати стан головної програми чи GUI.
+    Повертає кортеж (id, fitness, reached_goal_flag).
     """
     genome_id, genome = genome_tuple
     if not genome:
-        return genome_id, 0.001 # Мінімальний фітнес для None
+        return genome_id, 0.001, False # Мінімальний фітнес, ціль не досягнуто
 
     try:
         # Створюємо *нову* копію лабіринту та агента для цього процесу
         eval_maze = Maze(config['MAZE_WIDTH'], config['MAZE_HEIGHT'], config.get('MAZE_SEED'))
         if not eval_maze.start_pos:
              print(f"Error (process): Maze generation failed for genome {genome_id}")
-             return genome_id, 0.001
+             return genome_id, 0.001, False
 
-        # Передаємо КОПІЮ конфігу на всякий випадок
         agent = Agent(genome_id, eval_maze.start_pos, config.copy())
         max_steps = config.get('MAX_STEPS_PER_EVALUATION', 500)
-        colisions = 0
+        
+        genome_reached_goal_flag = False # Прапорець для цього геному
+
         for step in range(max_steps):
             if agent.reached_goal:
-                break
+                genome_reached_goal_flag = True # Встановлюємо прапорець
+                break 
             sensor_readings = agent.get_sensor_readings(eval_maze)
-            # Важливо: передаємо копію геному, бо activate_network може його змінювати (хоча не повинна)
             network_outputs = activate_network(genome.copy(), sensor_readings)
-            if network_outputs is None: # Перевірка на помилку активації
+            if network_outputs is None: 
                  print(f"Error (process): activate_network failed for genome {genome_id}")
-                 return genome_id, 0.001
+                 return genome_id, 0.001, False
             agent.update(eval_maze, network_outputs, dt=1)
-            if(agent.collided):
-                colisions += 1
             agent.steps_taken = step + 1
+        
+        # Перевіряємо ще раз після циклу, якщо ціль досягнута на останньому кроці
+        if agent.reached_goal and not genome_reached_goal_flag:
+            genome_reached_goal_flag = True
 
-        # --- Розрахунок фітнесу (перенесено сюди з main.py) ---
+        # --- Розрахунок фітнесу (ваш код залишається тут без змін) ---
         fitness = 0.0
         base_reward = 1000.0
-        if agent.reached_goal:
+        if agent.reached_goal: # Використовуємо стан агента для розрахунку фітнесу
             fitness += base_reward
             speed_bonus = (base_reward / 2.0) * (1.0 - (agent.steps_taken / max_steps))
             fitness += max(0.0, speed_bonus)
+            #fitness -= agent.steps_taken * 0.7 
         else:
             max_dist = math.hypot(eval_maze.width, eval_maze.height)
             if agent.min_dist_to_goal != float('inf') and max_dist > 0:
                  proximity = 1.0 - (agent.min_dist_to_goal / max_dist)
                  fitness += (base_reward / 2.0) * max(0.0, proximity)**2
-        if agent.reached_goal:
-            fitness -= agent.steps_taken * 0.7 # Маленький штраф за кроки
-        # if agent.velocity > 0.8:
-        #     fitness *= 1.6
-        # if colisions < 10:
-        #     fitness *= 1.2
-        if agent.collided:
-            fitness *= 0.5
-        if agent.velocity < 0.1:
+        
+        #if agent.collided:
+        #    fitness *= 0.5
+        if agent.velocity < 0.1 and not agent.reached_goal: # Додамо перевірку, щоб не штрафувати, якщо вже біля цілі
             fitness *= 0.5
         # -------------------------------------------------------
-        return genome_id, max(0.001, fitness)
+        
+        # Повертаємо ID, фітнес та прапорець досягнення цілі
+        return genome_id, max(0.001, fitness), genome_reached_goal_flag
 
     except Exception as e:
         print(f"Error evaluating genome {genome_id} in parallel process: {e}")
         import traceback
         traceback.print_exc()
-        return genome_id, 0.001 # Мінімальний фітнес при помилці
+        return genome_id, 0.001, False # Мінімальний фітнес, ціль не досягнуто
 
 def evaluation_function(genome: Genome, config: dict) -> float:
     """
@@ -312,7 +311,8 @@ class SimulationController:
              "average_fitness": None,
              "best_overall_fitness": None,
              "best_genome_current_gen": None,
-             "best_genome_overall": self.neat.best_genome_overall
+             "best_genome_overall": self.neat.best_genome_overall,
+             "first_goal_achieved_generation": self.neat.first_goal_achieved_generation # <--- ДОДАНО
          }
          current_best_genome = None
          if self.neat.population:

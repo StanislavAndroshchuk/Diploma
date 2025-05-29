@@ -133,10 +133,11 @@ class NEATJSONSerializer:
             "generation": stats.get("generation", generation),
             "max_fitness": stats.get("max_fitness"),
             "average_fitness": stats.get("average_fitness"),
-            "num_species": stats.get("num_species", len(species)),
+            "num_species": stats.get("num_species", len(species)), # Використовуємо дані з stats, якщо є
             "num_species_after_speciation": stats.get("num_species_after_speciation"),
-            "best_genome_current_gen_id": None,
-            "best_genome_overall_id": None
+            "best_genome_current_gen_id": None, # Буде заповнено нижче
+            "best_genome_overall_id": None,     # Буде заповнено нижче
+            "first_goal_achieved_generation": stats.get("first_goal_achieved_generation") # <--- ДОДАНО
         }
         
         # Обробляємо best_genome_current_gen
@@ -221,7 +222,8 @@ class NEATJSONSerializer:
                     str(sid): rep.id for sid, rep in neat_algorithm.species_representatives_prev_gen.items()
                 },
                 "genome_id_counter": next(neat_algorithm._genome_id_counter) - 1,
-                "max_species_id": max((s.id for s in neat_algorithm.species), default=0)
+                "max_species_id": max((s.id for s in neat_algorithm.species), default=0) if neat_algorithm.species else 0, # Додав перевірку на порожній список
+                "first_goal_achieved_generation": neat_algorithm.first_goal_achieved_generation # <--- ДОДАНО ДО ПОТОЧНОГО СТАНУ
             }
         }
         
@@ -266,6 +268,7 @@ class NEATJSONSerializer:
         # Відновлюємо поточний стан
         current_state = data["current_state"]
         neat.generation = current_state["generation"]
+        neat.first_goal_achieved_generation = current_state.get("first_goal_achieved_generation") # <--- ЗАВАНТАЖУЄМО
         
         # Відновлюємо популяцію
         neat.population = [
@@ -308,23 +311,23 @@ class NEATJSONSerializer:
         # Відновлюємо історію поколінь
         # Конвертуємо серіалізовані дані назад у формат, який очікує NEAT
         generation_history = []
-        for hist_entry in data.get("generation_history", []):
+        for hist_entry_data in data.get("generation_history", []): # Змінив hist_entry на hist_entry_data
             stat_entry = {
-                "generation": hist_entry.get("generation", 0),
-                "max_fitness": hist_entry.get("max_fitness"),
-                "average_fitness": hist_entry.get("average_fitness"),
-                "num_species": hist_entry.get("num_species", 0),
-                "num_species_after_speciation": hist_entry.get("num_species_after_speciation"),
+                "generation": hist_entry_data.get("generation", 0),
+                "max_fitness": hist_entry_data.get("max_fitness"),
+                "average_fitness": hist_entry_data.get("average_fitness"),
+                "num_species": hist_entry_data.get("num_species", 0),
+                "num_species_after_speciation": hist_entry_data.get("num_species_after_speciation"),
                 "best_genome_current_gen": None,
-                "best_genome_overall": None
+                "best_genome_overall": None,
+                "first_goal_achieved_generation": hist_entry_data.get("first_goal_achieved_generation") # <--- ЗАВАНТАЖУЄМО ДЛЯ ІСТОРІЇ
             }
             
-            # Відновлюємо посилання на геноми якщо вони доступні
-            best_current_id = hist_entry.get("best_genome_current_gen_id")
+            best_current_id = hist_entry_data.get("best_genome_current_gen_id")
             if best_current_id and best_current_id in all_genomes:
                 stat_entry["best_genome_current_gen"] = all_genomes[best_current_id]
             
-            best_overall_id = hist_entry.get("best_genome_overall_id")
+            best_overall_id = hist_entry_data.get("best_genome_overall_id")
             if best_overall_id and best_overall_id in all_genomes:
                 stat_entry["best_genome_overall"] = all_genomes[best_overall_id]
             

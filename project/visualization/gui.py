@@ -539,6 +539,8 @@ class MazeGUI:
         self.avg_fitness_label.pack(anchor=tk.W)
         self.best_overall_fitness_label = ttk.Label(stats_frame, text="Best Fitness (Overall): N/A")
         self.best_overall_fitness_label.pack(anchor=tk.W)
+        self.goal_achieved_gen_label = ttk.Label(stats_frame, text="Goal Achieved Gen: N/A") # <--- НОВИЙ LABEL
+        self.goal_achieved_gen_label.pack(anchor=tk.W)
 
          # --- Save/Load Training ---
         save_load_frame = ttk.LabelFrame(scrollable_frame, text="Save/Load Training", padding=(5, 5))
@@ -999,7 +1001,11 @@ class MazeGUI:
               self.avg_fitness_label.config(text=f"Avg Fitness (Gen): {afg_text}")
               self.best_overall_fitness_label.config(text=f"Best Fitness (Overall): {bfo_text}")
 
-              # Оновлюємо візуалізацію мережі для найкращого геному
+              first_goal_gen = stats.get('first_goal_achieved_generation') # <--- ОТРИМУЄМО ЗНАЧЕННЯ
+              fgg_text = str(first_goal_gen) if first_goal_gen is not None else "N/A"
+              self.goal_achieved_gen_label.config(text=f"Goal Achieved Gen: {fgg_text}") # <--- ОНОВЛЮЄМО LABEL
+
+              # ... (оновлення візуалізації мережі та self.update_gui()) ...
               best_overall_genome = stats.get('best_genome_overall')
               best_gen_genome = stats.get('best_genome_current_gen')
               genome_to_show = best_overall_genome if best_overall_genome else best_gen_genome
