@@ -100,6 +100,17 @@ def evaluate_single_genome(genome_tuple: Tuple[int, Genome], config: dict) -> Tu
             genome_reached_goal_flag = True
 
         # --- Розрахунок фітнесу (ваш код залишається тут без змін) ---
+        # fitness = 0.0
+        # BASE_REWARD = 1000.0
+        # x_start, y_start = float(eval_maze.start_pos[0]+0.5), float(eval_maze.start_pos[1]+0.5) #0.5 since they spawn in the center
+        # bf = math.hypot(eval_maze.goal_pos[0] + 0.5 - x_start, eval_maze.goal_pos[1] + 0.5 - y_start) # відстань від старту до цілі
+        # dg = agent.min_dist_to_goal # мінімальна відстань до цілі, яку агент досяг
+        # fitness = bf - dg # bias - distance to goal , so if fitness is close 0 , then agent is closer to goal
+        # if agent.reached_goal:
+        #     fitness += BASE_REWARD # Бонус за досягнення цілі
+        # else:
+        #     fitness = max(0.001, 1 - fitness / bf) # Нормалізуємо фітнес, щоб він був від 0 до 1, де 1 - це досягнення цілі
+        #     fitness *= BASE_REWARD # Масштабування фітнесу для кращої роботи NEAT
         fitness = 0.0
         base_reward = 1000.0
         if agent.reached_goal: # Використовуємо стан агента для розрахунку фітнесу
@@ -115,8 +126,8 @@ def evaluate_single_genome(genome_tuple: Tuple[int, Genome], config: dict) -> Tu
         
         #if agent.collided:
         #    fitness *= 0.5
-        if agent.velocity < 0.1 and not agent.reached_goal: # Додамо перевірку, щоб не штрафувати, якщо вже біля цілі
-            fitness *= 0.5
+        # if agent.velocity < 0.1 and not agent.reached_goal: # Додамо перевірку, щоб не штрафувати, якщо вже біля цілі
+        #     fitness *= 0.5
         # -------------------------------------------------------
         
         # Повертаємо ID, фітнес та прапорець досягнення цілі
