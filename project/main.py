@@ -480,8 +480,20 @@ class SimulationController:
         print(f"Stats: MaxFit={max_fit:.4f}, AvgFit={avg_fit:.4f}, Species={num_sp}")
 
         # Оновлюємо GUI зібраною статистикою
-        self._update_gui_stats()
+        gui_stats_payload = {
+            "generation": stats.get('generation'),
+            "num_species": stats.get('num_species_after_speciation', len(self.neat.species)),
+            "max_fitness": stats.get('max_fitness'),
+            "average_fitness": stats.get('average_fitness'),
+            "best_genome_current_gen": stats.get('best_genome_current_gen'),
+            "best_genome_overall": self.neat.best_genome_overall, # Беремо поточний найкращий загалом
+            "best_overall_fitness": self.neat.best_genome_overall.fitness if self.neat.best_genome_overall else None,
+            "first_goal_achieved_generation": self.neat.first_goal_achieved_generation
+        }
         # Скидаємо агентів для візуалізації на основі НОВОЇ популяції
+        self.gui.update_gui_from_thread(gui_stats_payload)
+
+        # Наступні рядки залишаються
         self._reset_agents_for_visualization()
         self._update_agents_visuals()
         self.gui.update_gui()
@@ -515,7 +527,17 @@ class SimulationController:
                  print(f"Generation {gen} finished in {end_time_gen - start_time_gen:.2f} sec. MaxFit={max_fit:.4f}, AvgFit={avg_fit:.4f}, Sp={num_sp}")
 
                  # Оновлюємо GUI через безпечний метод
-                 self._update_gui_stats() # Передаємо статистику в головний потік
+                 gui_stats_payload = {
+                    "generation": stats.get('generation'),
+                    "num_species": stats.get('num_species_after_speciation', len(self.neat.species)),
+                    "max_fitness": stats.get('max_fitness'),
+                    "average_fitness": stats.get('average_fitness'),
+                    "best_genome_current_gen": stats.get('best_genome_current_gen'),
+                    "best_genome_overall": self.neat.best_genome_overall, # Беремо поточний найкращий загалом
+                    "best_overall_fitness": self.neat.best_genome_overall.fitness if self.neat.best_genome_overall else None,
+                    "first_goal_achieved_generation": self.neat.first_goal_achieved_generation
+                }
+                 self.gui.update_gui_from_thread(gui_stats_payload) # Передаємо зібрану статистику
 
                  # Невелике очікування, щоб GUI встиг оновитись (опціонально)
                  # time.sleep(0.01)
