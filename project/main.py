@@ -308,13 +308,31 @@ class SimulationController:
         """Шукає геном за ID у поточній популяції."""
         if not self.neat or not self.neat.population:
             return None
+        
+        # Перетворюємо genome_id на int, якщо він прийшов як рядок (наприклад, з Entry віджета)
+        try:
+            target_id = int(genome_id)
+        except ValueError:
+            print(f"Warning: Invalid genome_id format passed to get_genome_by_id: {genome_id}")
+            return None
+
         for genome in self.neat.population:
-            # Геноми можуть мати рядкові ID після кросоверу, порівнюємо обережно
-            if str(genome.id) == str(genome_id):
+            if genome and genome.id == target_id: # Порівнюємо як числа
                 return genome
-        # Можливо, перевіряємо і найкращий загальний
-        if self.neat.best_genome_overall and str(self.neat.best_genome_overall.id) == str(genome_id):
-             return self.neat.best_genome_overall
+        
+        if self.neat.best_genome_overall and self.neat.best_genome_overall.id == target_id:
+            return self.neat.best_genome_overall
+        
+        # Додатковий пошук, якщо геном є в якомусь виді, але не в активній популяції (менш імовірно, але можливо)
+        if self.neat.species:
+            for spec in self.neat.species:
+                for member in spec.members:
+                    if member and member.id == target_id:
+                        print(f"Info: Genome {target_id} found in species {spec.id} members, but not in main population or best_overall.")
+                        return member
+                if spec.representative and spec.representative.id == target_id:
+                    print(f"Info: Genome {target_id} found as representative of species {spec.id}, but not in main population or best_overall.")
+                    return spec.representative
         return None 
     
     def _update_gui_stats(self):
