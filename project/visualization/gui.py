@@ -10,12 +10,12 @@ from PIL import Image, ImageTk, ImageDraw
 from typing import Optional, TYPE_CHECKING
 import pandas as pd  # Для _plot_complexity_analysis
 from neat.json_serializer import NEATJSONSerializer  # Для _export_current_data
-from neat.data_analyzer import NEATDataAnalyzer 
+from neat.data_analyzer import NEATDataAnalyzer
 import threading
 # --- Імпорт для type hinting без циклічних залежностей ---
 if TYPE_CHECKING:
-    from project.neat.genome import Genome
-    from project.main import SimulationController
+    from project.neat.genome import Genome # type: ignore
+    from project.main import SimulationController # type: ignore # Змінено для уникнення конфлікту з project.main
 
 # --- Імпортуємо візуалізатор та константи ---
 try:
@@ -98,7 +98,7 @@ class MazeGUI:
         """
         self.master = master
         self.main_controller = main_controller
-        self.config = config
+        self.config = config # config вже містить актуальний MAZE_SEED з SimulationController
         self.master.title("NEAT Maze Navigation")
 
         self._cell_size = config.get('CELL_SIZE_PX', 20)
@@ -136,6 +136,7 @@ class MazeGUI:
         self._network_drag_start_x = 0
         self._network_drag_start_y = 0
         # --- Віджети на панелі керування ---
+        # self.seed_var буде створено всередині _create_control_widgets
         self._create_control_widgets(self.control_frame)
         # Одразу оновимо візуалізацію мережі при старті
         self.update_network_visualization()
@@ -438,6 +439,80 @@ class MazeGUI:
             #                                  fill=COLOR_RANGEFINDER_HIT, outline="", tags=(tag_rays, "rangefinder_hit"))
 
 
+    def _update_species_inspector(self):
+        """Оновлює Treeview інспектора видів поточними даними."""
+        if not hasattr(self, 'species_tree') or not self.main_controller or not self.main_controller.neat:
+            return
+
+        # Зберігаємо стан розгорнутих вузлів, щоб відновити його
+        expanded_species_iids = set()
+        for species_iid in self.species_tree.get_children():
+            if self.species_tree.item(species_iid, "open"):
+                expanded_species_iids.add(species_iid)
+
+        # Очищаємо попередні дані
+        for item in self.species_tree.get_children():
+            self.species_tree.delete(item)
+
+        species_list = self.main_controller.neat.species
+        if not species_list:
+            self.species_tree.insert("", tk.END, text="No species yet.", iid="no_species_placeholder")
+            return
+
+        # Сортуємо види за ID для стабільного відображення
+        sorted_species_list = sorted(species_list, key=lambda s: s.id if s else float('inf'))
+
+        for spec in sorted_species_list:
+            if not spec:  # Пропускаємо, якщо об'єкт виду None
+                continue
+
+            rep_id_str = str(spec.representative.id) if spec.representative else "N/A"
+            best_fit_str = f"{spec.best_fitness_ever:.4f}" if spec.best_fitness_ever is not None else "N/A"
+            num_members = len(spec.members)
+            
+            species_iid = f"species_{spec.id}" # Унікальний ID для елемента Treeview
+
+            self.species_tree.insert(
+                "", tk.END,  # Вставляємо на верхній рівень
+                iid=species_iid,
+                text=str(spec.id),  # Текст для першої колонки (#0)
+                values=(
+                    num_members,
+                    rep_id_str,
+                    best_fit_str,
+                    spec.generations_since_improvement
+                ),
+                open=(species_iid in expanded_species_iids) # Відновлюємо стан розгорнутості
+            )
+
+            # Додаємо членів виду як дочірні елементи
+            if num_members > 0:
+                # Сортуємо членів за фітнесом (від кращого до гіршого)
+                sorted_members = sorted(spec.members, key=lambda g: g.fitness if g and g.fitness is not None else -float('inf'), reverse=True)
+                
+                # Обмежимо кількість відображуваних геномів, щоб не перевантажувати GUI
+                max_genomes_to_show = 15 
+                for i, member_genome in enumerate(sorted_members):
+                    if i >= max_genomes_to_show and num_members > max_genomes_to_show:
+                        self.species_tree.insert(species_iid, tk.END, 
+                                                text=f"    ... and {num_members - max_genomes_to_show} more",
+                                                values=("", "", "", ""))
+                        break
+                    if not member_genome: continue
+
+                    genome_iid = f"genome_{spec.id}_{member_genome.id}"
+                    fitness_str = f"{member_genome.fitness:.4f}" if member_genome.fitness is not None else "N/A"
+                    
+                    # Для дочірніх елементів: ID геному в першій колонці, фітнес - у другій ("s_members")
+                    # Інші колонки можна залишити порожніми або показати "-"
+                    self.species_tree.insert(
+                        species_iid, tk.END, # Вставляємо як дочірній до species_iid
+                        iid=genome_iid,
+                        text=f"    └ GID: {member_genome.id}", 
+                        values=(f"Fit: {fitness_str}", "-", "-", "-") 
+                    )
+            else:
+                self.species_tree.insert(species_iid, tk.END, text="    (No members)")
     def _create_control_widgets(self, parent_frame):
         """Створює віджети на панелі керування."""
         # 1. --- Create Canvas and Scrollbar ---
@@ -511,12 +586,16 @@ class MazeGUI:
         # --- Налаштування Лабіринту ---
         settings_frame = ttk.LabelFrame(scrollable_frame, text="Maze Settings", padding=(5, 5))
         settings_frame.grid(row=current_row, column=0, sticky="ew", padx=5, pady=5); current_row += 1
-        settings_frame.columnconfigure(1, weight=1)
+        settings_frame.columnconfigure(1, weight=1) # Дозволяємо полю вводу розширюватись
+
         ttk.Label(settings_frame, text="Maze Seed:").grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
-        initial_seed = self.config.get("MAZE_SEED", "")
-        self.seed_var = tk.StringVar(value=str(initial_seed) if initial_seed is not None else "")
+        # self.config тут - це конфіг, переданий в MazeGUI при ініціалізації,
+        # який вже містить фактичний сід першого лабіринту з SimulationController
+        initial_seed_value = self.config.get("MAZE_SEED", "")
+        self.seed_var = tk.StringVar(value=str(initial_seed_value) if initial_seed_value is not None else "")
         self.seed_entry = ttk.Entry(settings_frame, textvariable=self.seed_var, width=15)
         self.seed_entry.grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+
         self.new_maze_button = ttk.Button(settings_frame, text="Generate New Maze", command=self._on_new_maze)
         self.new_maze_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 2))
         
@@ -534,6 +613,8 @@ class MazeGUI:
         self.avg_fitness_label.pack(anchor=tk.W)
         self.best_overall_fitness_label = ttk.Label(stats_frame, text="Best Fitness (Overall): N/A")
         self.best_overall_fitness_label.pack(anchor=tk.W)
+        self.goal_achieved_gen_label = ttk.Label(stats_frame, text="Goal Achieved Gen: N/A") # <--- НОВИЙ LABEL
+        self.goal_achieved_gen_label.pack(anchor=tk.W)
 
          # --- Save/Load Training ---
         save_load_frame = ttk.LabelFrame(scrollable_frame, text="Save/Load Training", padding=(5, 5))
@@ -555,6 +636,45 @@ class MazeGUI:
                                                   variable=self.show_sensors_var,
                                                   command=self._on_toggle_show_sensors)
         self.show_sensors_check.pack(anchor=tk.W, padx=5, pady=2)
+                # --- Інспектор Видів ---
+        species_inspector_frame = ttk.LabelFrame(scrollable_frame, text="Species Inspector", padding=(5, 5))
+        species_inspector_frame.grid(row=current_row, column=0, sticky="nsew", padx=5, pady=5)
+        # Дозволяємо цьому фрейму розширюватися по вертикалі, якщо є місце
+        scrollable_frame.grid_rowconfigure(current_row, weight=1) 
+        current_row += 1
+        # Налаштування сітки для species_inspector_frame, щоб Treeview розширювався
+        species_inspector_frame.grid_rowconfigure(0, weight=1)
+        species_inspector_frame.grid_columnconfigure(0, weight=1)
+
+        # Створюємо Treeview
+        # Колонки: ID виду (#0, основний текст), К-ть членів, ID представника, Найкращий фітнес виду, Стагнація
+        self.species_tree = ttk.Treeview(species_inspector_frame, 
+                                         columns=("s_members", "s_rep_id", "s_best_fit", "s_stagnant"), 
+                                         show="tree headings") # "tree" показує ієрархію, "headings" показує заголовки
+
+        self.species_tree.heading("#0", text="Species ID") 
+        self.species_tree.column("#0", width=70, minwidth=50, stretch=tk.NO, anchor=tk.W)
+
+        self.species_tree.heading("s_members", text="Members")
+        self.species_tree.column("s_members", width=60, minwidth=40, stretch=tk.NO, anchor=tk.CENTER)
+
+        self.species_tree.heading("s_rep_id", text="Rep ID")
+        self.species_tree.column("s_rep_id", width=60, minwidth=40, stretch=tk.NO, anchor=tk.CENTER)
+        
+        self.species_tree.heading("s_best_fit", text="Best Fit Ever")
+        self.species_tree.column("s_best_fit", width=100, minwidth=70, stretch=tk.YES, anchor=tk.E)
+
+        self.species_tree.heading("s_stagnant", text="Stagnant")
+        self.species_tree.column("s_stagnant", width=60, minwidth=50, stretch=tk.NO, anchor=tk.CENTER)
+
+        # Скролбари для Treeview
+        species_tree_scrollbar_y = ttk.Scrollbar(species_inspector_frame, orient="vertical", command=self.species_tree.yview)
+        species_tree_scrollbar_x = ttk.Scrollbar(species_inspector_frame, orient="horizontal", command=self.species_tree.xview)
+        self.species_tree.configure(yscrollcommand=species_tree_scrollbar_y.set, xscrollcommand=species_tree_scrollbar_x.set)
+
+        self.species_tree.grid(row=0, column=0, sticky="nsew")
+        species_tree_scrollbar_y.grid(row=0, column=1, sticky="ns")
+        species_tree_scrollbar_x.grid(row=1, column=0, sticky="ew")
         # --- Відображення Топології ---
         self.network_frame = ttk.LabelFrame(scrollable_frame, text="Network Topology", padding=(5, 5))
         self.network_frame.grid(row=current_row, column=0, sticky="nsew", padx=5, pady=5)
@@ -600,7 +720,7 @@ class MazeGUI:
         if self.main_controller:
             if self.is_running: # Зупиняємо візуалізацію перед збереженням
                 self.is_running = False
-                self.set_controls_state(False) # Оновлюємо стан кнопок
+                self.set_controls_state(False, running_multiple=self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False) # Оновлюємо стан кнопок
                 # self.main_controller.toggle_simulation(False) # Повідомляємо контролер
             self.main_controller.save_simulation()
 
@@ -610,10 +730,16 @@ class MazeGUI:
                 self.is_running = False
                 self.set_controls_state(False)
                 # self.main_controller.toggle_simulation(False)
-            self.main_controller.load_simulation()
-            # Оновлюємо сід в GUI після завантаження
+            
+            self.main_controller.load_simulation() # Цей метод оновить config в main_controller
+
+            # Оновлюємо сід в GUI після завантаження, беручи його з оновленого config контролера
             if hasattr(self.main_controller, 'config') and 'MAZE_SEED' in self.main_controller.config:
-                self.seed_var.set(str(self.main_controller.config['MAZE_SEED']))
+                loaded_seed = self.main_controller.config.get('MAZE_SEED')
+                self.seed_var.set(str(loaded_seed) if loaded_seed is not None else "")
+            else:
+                 self.seed_var.set("") # Якщо сіда немає
+
             # Оновлюємо візуалізацію мережі, щоб показати завантажений геном
             self.update_network_visualization()
     # --- Обробники подій для зуму та панорамування ---
@@ -988,13 +1114,23 @@ class MazeGUI:
               self.avg_fitness_label.config(text=f"Avg Fitness (Gen): {afg_text}")
               self.best_overall_fitness_label.config(text=f"Best Fitness (Overall): {bfo_text}")
 
-              # Оновлюємо візуалізацію мережі для найкращого геному
-              best_overall_genome = stats.get('best_genome_overall')
-              best_gen_genome = stats.get('best_genome_current_gen')
-              genome_to_show = best_overall_genome if best_overall_genome else best_gen_genome
-              genome_id_to_show = genome_to_show.id if genome_to_show else None
+              first_goal_gen = stats.get('first_goal_achieved_generation') # <--- ОТРИМУЄМО ЗНАЧЕННЯ
+              fgg_text = str(first_goal_gen) if first_goal_gen is not None else "N/A"
+              self.goal_achieved_gen_label.config(text=f"Goal Achieved Gen: {fgg_text}") # <--- ОНОВЛЮЄМО LABEL
 
-              self.update_network_visualization(genome_id_to_show) # Викличе генерацію та display_network
+              # Оновлення візуалізації мережі
+              id_to_show_on_network_canvas = self.genome_to_display_id # ID, обраний користувачем
+              if id_to_show_on_network_canvas is None: # Якщо користувач не обирав
+                # Пріоритет: найкращий загалом, потім найкращий з поточного (оціненого) покоління
+                if stats.get('best_genome_overall') and stats['best_genome_overall'].id is not None:
+                    id_to_show_on_network_canvas = stats['best_genome_overall'].id
+                elif stats.get('best_genome_current_gen') and stats['best_genome_current_gen'].id is not None:
+                    id_to_show_on_network_canvas = stats['best_genome_current_gen'].id
+
+              self.update_network_visualization(id_to_show_on_network_canvas)
+
+               # Оновлюємо інспектор видів
+              self._update_species_inspector() # Цей метод візьме дані з self.main_controller.neat.species
 
               self.update_gui() # Оновлюємо саме вікно
 
@@ -1023,48 +1159,67 @@ class MazeGUI:
     def _on_start_pause(self):
         if self.main_controller:
             self.is_running = not self.is_running
-            self.set_controls_state(self.is_running)
+            self.set_controls_state(self.is_running, 
+                                    running_multiple=self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False)
             self.main_controller.toggle_simulation(self.is_running)
         else: print("Error: Main controller missing.")
 
     def _on_next_generation(self):
         if not self.is_running and self.main_controller:
-            self.set_controls_state(True)
+            # Використовуємо поточний стан _is_running_multiple з контролера
+            is_batch_running = self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False
+            self.set_controls_state(True, running_multiple=is_batch_running) # Блокуємо на час виконання
             self.master.update()
             try:
                 self.main_controller.run_one_generation()
                 # ОНОВЛЮЄМО ВІЗУАЛІЗАЦІЮ ПІСЛЯ ГЕНЕРАЦІЇ
                 self.update_network_visualization() # Покаже найкращий за замовчуванням
             finally:
-                self.set_controls_state(False)
+                # Розблоковуємо, тільки якщо не йде batch run
+                self.set_controls_state(False, running_multiple=is_batch_running)
         elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_new_maze(self):
          if not self.is_running and self.main_controller:
             seed_str = self.seed_var.get().strip()
             seed = None
-            if seed_str:
-                try: seed = int(seed_str)
+            if seed_str: # Якщо щось введено
+                try:
+                    seed = int(seed_str)
                 except ValueError:
                     messagebox.showerror("Invalid Seed", f"Cannot parse seed: '{seed_str}'. Using random.")
-                    self.seed_var.set("")
-            new_seed = self.main_controller.generate_new_maze(seed)
-            if new_seed is not None: self.seed_var.set(str(new_seed))
+                    self.seed_var.set("") # Очищаємо невалідний ввід
+            
+            # Викликаємо метод контролера для генерації нового лабіринту
+            new_seed_used = self.main_controller.generate_new_maze(seed)
+            
+            # Оновлюємо поле сіда в GUI фактично використаним сідом
+            if new_seed_used is not None:
+                self.seed_var.set(str(new_seed_used))
+            # Якщо new_seed_used is None (мало б не статися), поле seed_var вже очищене або містить старе значення
+                 
          elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_reset(self):
         if not self.is_running and self.main_controller:
              if messagebox.askyesno("Confirm Reset", "Reset NEAT simulation to generation 0?"):
-                self.set_controls_state(True)
+                # Використовуємо поточний стан _is_running_multiple з контролера
+                is_batch_running = self.main_controller._is_running_multiple if hasattr(self.main_controller, '_is_running_multiple') else False
+                self.set_controls_state(True, running_multiple=is_batch_running) # Блокуємо на час скидання
                 self.master.update()
                 try:
-                    self.main_controller.reset_simulation()
-                    new_seed = self.config.get('MAZE_SEED', '')
-                    self.seed_var.set(str(new_seed) if new_seed is not None else "")
+                    self.main_controller.reset_simulation() # Цей метод оновить config контролера
+                    
+                    # Оновлюємо поле сіда в GUI з config контролера
+                    # self.config в GUI може бути не актуальним, якщо reset_simulation його перезавантажує
+                    new_seed_from_controller = self.main_controller.config.get('MAZE_SEED', '')
+                    self.seed_var.set(str(new_seed_from_controller) if new_seed_from_controller is not None else "")
+                    
                     # ОНОВЛЮЄМО ВІЗУАЛІЗАЦІЮ ПІСЛЯ СКИДАННЯ
                     self.update_network_visualization() # Покаже випадковий геном
                 finally:
-                    self.set_controls_state(False)
+                    # Розблоковуємо, тільки якщо не йде batch run
+                    self.set_controls_state(False, running_multiple=is_batch_running)
         elif not self.main_controller: print("Error: Main controller missing.")
 
     def _on_visualize_genome_id(self):
@@ -1072,19 +1227,26 @@ class MazeGUI:
         if self.is_running or not self.main_controller: return
 
         genome_id_str = self.genome_id_var.get().strip()
+        print(genome_id_str)
         if not genome_id_str:
-             messagebox.showwarning("Input Error", "Please enter a Genome ID.")
-             return
+            messagebox.showwarning("Input Error", "Please enter a Genome ID.")
+            return
 
         try:
-             genome_id = int(genome_id_str)
-             self.update_network_visualization(genome_id) # Оновлюємо візуалізацію
-             if str(self.genome_to_display_id) != genome_id_str: # Перевіряємо чи вдалось
-                 messagebox.showerror("Genome Not Found", f"Genome with ID '{genome_id_str}' not found.")
+            genome_id_to_find = int(genome_id_str) # Перетворюємо на int тут
+            # self.update_network_visualization викликає get_genome_by_id, який тепер очікує int
+            self.update_network_visualization(genome_id_to_find) 
+            
+            # Перевіряємо, чи геном, що відображається, відповідає запиту
+            # self.genome_to_display_id встановлюється в update_network_visualization
+            if self.genome_to_display_id is None or int(self.genome_to_display_id) != genome_id_to_find:
+                messagebox.showerror("Genome Not Found", f"Genome with ID '{genome_id_to_find}' not found in the current population or as best overall.")
         except ValueError:
-             messagebox.showerror("Invalid ID", f"Cannot parse Genome ID: '{genome_id_str}'.")
+            messagebox.showerror("Invalid ID", f"Cannot parse Genome ID: '{genome_id_str}'. Must be an integer.")
         except Exception as e:
-             messagebox.showerror("Visualization Error", f"Could not visualize genome {genome_id_str}:\n{e}")
+            messagebox.showerror("Visualization Error", f"Could not visualize genome {genome_id_str}:\n{e}")
+            import traceback
+            traceback.print_exc()
 
     def update_gui(self):
          """Оновлює GUI Tkinter."""

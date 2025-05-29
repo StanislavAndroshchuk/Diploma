@@ -6,7 +6,8 @@ import math
 import copy
 import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed # Додаємо імпорт
-import os # Для os.cpu_count
+import os
+from typing import Optional # Для os.cpu_count
 
 from .genome import Genome
 from .innovation import InnovationManager
@@ -54,6 +55,8 @@ class NeatAlgorithm:
         self.species = []
         self.generation = 0
         self.best_genome_overall = None
+        self.first_goal_achieved_generation: Optional[int] = None # <--- НОВИЙ АТРИБУТ
+
         self._speciate_population()
         if not _is_loading:
             self.population = self._create_initial_population(self.innovation_manager)
@@ -155,7 +158,8 @@ class NeatAlgorithm:
             '_genome_id_counter_val': next(self._genome_id_counter) - 1,
             '_max_used_species_id': max((s.id for s in self.species if s), default=0),
             'species_representatives_prev_gen_ids': prev_gen_reps_data_ids,
-            'generation_statistics': self.generation_statistics
+            'first_goal_achieved_generation': self.first_goal_achieved_generation, # <--- ЗБЕРІГАЄМО
+            'generation_statistics': self.generation_statistics 
         }
         print(f"DEBUG SAVE: Max species ID being saved: {state['_max_used_species_id']}")
         print(f"DEBUG SAVE: Genome counter value being saved: {state['_genome_id_counter_val']}")
@@ -273,8 +277,8 @@ class NeatAlgorithm:
                 # print(f"Warning (Load): Could not find genome for saved previous representative ID '{rep_id_prev}' of species_id_key '{spec_id}'.")
         # print(f"Info (Load): Loaded {len(neat.species_representatives_prev_gen)} previous generation representatives.")
         
+        neat.first_goal_achieved_generation = state_data.get('first_goal_achieved_generation') # <--- ЗАВАНТАЖУЄМО
         neat.generation_statistics = state_data.get('generation_statistics', [])
-
         print(f"NEAT state loaded. Gen: {neat.generation}, Pop: {len(neat.population)}, Species: {len(neat.species)}, PrevReps: {len(neat.species_representatives_prev_gen)}")
         return neat
     
@@ -467,8 +471,8 @@ class NeatAlgorithm:
         prob_crossover = self.config.get('CROSSOVER_RATE', 0.75)
         elitism_count = self.config.get('ELITISM', 1)
 
-        self._handle_stagnation()
-        num_offspring_map = self._determine_num_offspring()
+        self._handle_stagnation() # забираємо стагнуючі види з пулу для розмноження
+        num_offspring_map = self._determine_num_offspring() 
 
         if not self.species:
              print("Error: No species left to reproduce. Resetting population.")
@@ -577,7 +581,7 @@ class NeatAlgorithm:
         total_fitness = 0.0
         max_fitness = -float('inf')
         current_best_genome = None
-        evaluation_results = {}
+        evaluation_results_with_goal_flag = {} # Зберігатимемо (fitness, reached_goal)
 
         # --- Паралельна оцінка фітнесу ---
         population_to_evaluate = [(g.id, g) for g in self.population if g] # Список кортежів (id, genome)
@@ -600,28 +604,31 @@ class NeatAlgorithm:
                 for future in as_completed(futures):
                     genome_id = futures[future]
                     try:
-                        _, fitness = future.result() # Отримуємо результат (id, fitness)
-                        evaluation_results[genome_id] = fitness
+                        # Тепер отримуємо (id, fitness, reached_goal_flag)
+                        _, fitness, reached_goal_flag = future.result() 
+                        evaluation_results_with_goal_flag[genome_id] = (fitness, reached_goal_flag)
                     except Exception as exc:
                         print(f'Genome {genome_id} evaluation generated an exception: {exc}')
-                        evaluation_results[genome_id] = 0.001 # Мінімальний фітнес при помилці
+                        evaluation_results_with_goal_flag[genome_id] = (0.001, False) 
         except Exception as pool_exc:
              print(f"Error during ProcessPoolExecutor execution: {pool_exc}")
-             # Якщо пул не запустився, оцінюємо послідовно як запасний варіант
-             for genome_id, genome in population_to_evaluate:
+             for genome_id, genome_obj in population_to_evaluate: # Змінено genome на genome_obj для ясності
                  try:
-                     _, fitness = evaluation_function((genome_id, genome), config_copy)
-                     evaluation_results[genome_id] = fitness
+                     _, fitness, reached_goal_flag = evaluation_function((genome_id, genome_obj), config_copy)
+                     evaluation_results_with_goal_flag[genome_id] = (fitness, reached_goal_flag)
                  except Exception as eval_exc:
                       print(f"Sequential evaluation error for genome {genome_id}: {eval_exc}")
-                      evaluation_results[genome_id] = 0.001
-        # ------------------------------------
-
-        # Оновлюємо фітнес в геномах поточної популяції
+                      evaluation_results_with_goal_flag[genome_id] = (0.001, False)
+        
+        any_genome_reached_goal_this_gen = False # Прапорець для поточного покоління
         valid_evaluated_genomes = 0
         for genome in self.population:
              if genome:
-                  genome.fitness = evaluation_results.get(genome.id, 0.001)
+                  fitness, reached_goal_flag = evaluation_results_with_goal_flag.get(genome.id, (0.001, False))
+                  genome.fitness = fitness
+                  if reached_goal_flag: # <--- ПЕРЕВІРКА
+                      any_genome_reached_goal_this_gen = True
+                  
                   total_fitness += genome.fitness
                   valid_evaluated_genomes += 1
                   if genome.fitness > max_fitness:
@@ -635,24 +642,30 @@ class NeatAlgorithm:
             # Копіюємо кращий геном, щоб зберегти його стан на цей момент
             self.best_genome_overall = current_best_genome.copy() if current_best_genome else None
 
-        # --- Наступні кроки NEAT ---
-        # Оновлюємо статистику перед тим, як _speciate_population змінить self.species
+        # Оновлюємо first_goal_achieved_generation
+        if any_genome_reached_goal_this_gen and self.first_goal_achieved_generation is None:
+            self.first_goal_achieved_generation = self.generation
+            print(f"INFO: Goal first achieved at generation {self.generation}!")
+
         stats = {
             "generation": self.generation,
             "max_fitness": max_fitness if max_fitness > -float('inf') else None,
             "average_fitness": avg_fitness,
-            "num_species": len(self.species), # Кількість видів ДО перевидоутворення
+            "num_species": len(self.species), 
             "best_genome_current_gen": current_best_genome,
-            "best_genome_overall": self.best_genome_overall
+            "best_genome_overall": self.best_genome_overall,
+            "first_goal_achieved_generation": self.first_goal_achieved_generation # <--- ДОДАНО ДО СТАТИСТИКИ
         }
         # Зберігаємо представників поточних видів ПЕРЕД тим, як _speciate_population їх потенційно змінить
         self._update_previous_gen_representatives() # <--- ВАЖЛИВО
-
-        self._speciate_population() # Тепер використовує self.species_representatives_prev_gen
+        self._speciate_population()
+        for spec in self.species:
+            if spec.members:
+                spec.sort_members_by_fitness()
         self._calculate_adjusted_fitness()
         next_population = self._reproduce()
         self.population = next_population
-        stats["num_species_after_speciation"] = len(self.species)
+        stats["num_species_after_speciation"] = len(self.species) 
         self.generation_statistics.append(stats) # Зберігаємо фінальну статистик
         # Повертаємо статистику
         return stats
