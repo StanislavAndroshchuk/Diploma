@@ -100,37 +100,78 @@ def evaluate_single_genome(genome_tuple: Tuple[int, Genome], config: dict) -> Tu
             genome_reached_goal_flag = True
 
         #--- Розрахунок фітнесу (ваш код залишається тут без змін) ---
-        fitness = 0.0
-        BASE_REWARD = 1000.0
-        x_start, y_start = float(eval_maze.start_pos[0]+0.5), float(eval_maze.start_pos[1]+0.5) #0.5 since they spawn in the center
-        bf = math.hypot(eval_maze.goal_pos[0] + 0.5 - x_start, eval_maze.goal_pos[1] + 0.5 - y_start) # відстань від старту до цілі
-        dg = agent.min_dist_to_goal # мінімальна відстань до цілі, яку агент досяг
-        fitness = bf - dg # bias - distance to goal , so if fitness is close 0 , then agent is closer to goal
-        if agent.reached_goal:
-            fitness = BASE_REWARD # Бонус за досягнення цілі
-            print(f"Genome {genome_id} reached goal in {agent.steps_taken} steps with fitness {fitness}.")
-        else:
-            if fitness < 0: # Якщо агент не рухається до цілі
-                fitness = 0.001 # Не може бути негативним, якщо не досяг цілі
-            else:
-                fitness = max(0.001, (fitness / bf)) # Нормалізуємо фітнес, щоб він був від 0 до 1, де 1 - це досягнення цілі
-                fitness *= BASE_REWARD # Масштабування фітнесу для кращої роботи NEAT
-            if fitness > BASE_REWARD:
-                print("WATA SIGMA")
         # fitness = 0.0
+        # BASE_REWARD = 1000.0
+        # x_start, y_start = float(eval_maze.start_pos[0]+0.5), float(eval_maze.start_pos[1]+0.5) #0.5 since they spawn in the center
+        # bf = math.hypot(eval_maze.goal_pos[0] + 0.5 - x_start, eval_maze.goal_pos[1] + 0.5 - y_start) # відстань від старту до цілі
+        # dg = agent.min_dist_to_goal # мінімальна відстань до цілі, яку агент досяг
+        # fitness = bf - dg # bias - distance to goal , so if fitness is close 0 , then agent is closer to goal
+        # if agent.reached_goal:
+        #     fitness = BASE_REWARD # Бонус за досягнення цілі
+        #     print(f"Genome {genome_id} reached goal in {agent.steps_taken} steps with fitness {fitness}.")
+        # else:
+        #     if fitness < 0: # Якщо агент не рухається до цілі
+        #         fitness = 0.001 # Не може бути негативним, якщо не досяг цілі
+        #     else:
+        #         fitness = max(0.001, (fitness / bf)) # Нормалізуємо фітнес, щоб він був від 0 до 1, де 1 - це досягнення цілі
+        #         fitness *= BASE_REWARD # Масштабування фітнесу для кращої роботи NEAT
+        #     if fitness > BASE_REWARD:
+        #         print("WATA SIGMA")
+        # # fitness = 0.0
+        #------------------------------
+        fitness = 0.0
+        MAX_FITNESS_TARGET = 2000.0 # Цільове максимальне значення фітнесу
+         # Компоненти винагороди
+        GOAL_REACHED_BASE_REWARD = MAX_FITNESS_TARGET * 0.50  # Наприклад, 1000
+        EFFICIENCY_COMPONENT_MAX = MAX_FITNESS_TARGET * 0.50 # Наприклад, 1000
+        # Максимальна винагорода за близькість, якщо ціль не досягнута
+        PROXIMITY_REWARD_MAX_NO_GOAL = GOAL_REACHED_BASE_REWARD * 0.95 # Наприклад, 950
+        if agent.reached_goal:
+            fitness = GOAL_REACHED_BASE_REWARD
+            # Бонус за ефективність (менше кроків - краще)
+            if max_steps > 0:
+                # Нормалізований коефіцієнт ефективності: 1.0 (найкраще) -> 0.0 (найгірше)
+                efficiency_ratio = 1.0 - (float(agent.steps_taken) / max_steps)
+                fitness += EFFICIENCY_COMPONENT_MAX * max(0.0, efficiency_ratio)
+        else:
+            # Розрахунок винагороди за близькість до цілі
+            # Використовуємо загальну діагональ лабіринту для нормалізації відстані,
+            # щоб винагорода була більш-менш порівнянна для лабіринтів різного розміру,
+            # але з однаковою максимальною винагородою за близькість.
+            
+            max_dist_in_maze = math.hypot(eval_maze.width, eval_maze.height)
+
+            if agent.min_dist_to_goal == float('inf') or max_dist_in_maze == 0:
+                # Агент не рухався або лабіринт нульового розміру (малоймовірно)
+                fitness = 0.0
+            else:
+                # Нормалізована близькість: 1.0 (дуже близько), 0.0 (дуже далеко)
+                # Використовуємо квадрат, щоб сильніше заохочувати значне наближення
+                proximity_score = 1.0 - (agent.min_dist_to_goal / max_dist_in_maze)
+                proximity_score = max(0.0, min(1.0, proximity_score)) # Обмежуємо в [0, 1]
+                
+                fitness = PROXIMITY_REWARD_MAX_NO_GOAL * (proximity_score ** 2)
+
+        # Штрафи (застосовуються після основного розрахунку фітнесу)
+        
+        # Штраф за колізію (зменшує фітнес на відсоток)
+        if agent.collided:
+            fitness *= 0.5  # Зменшуємо поточний фітнес на 50%
+
         # base_reward = 1000.0
+        # MAX_FITNESS = 2000.0
+        # MAX_FITNESS_NO_GOAL = 999.0
         # if agent.reached_goal: # Використовуємо стан агента для розрахунку фітнесу
         #     fitness += base_reward
         #     speed_bonus = (base_reward / 2.0) * (1.0 - (agent.steps_taken / max_steps))
         #     fitness += max(0.0, speed_bonus)
-        #     #fitness -= agent.steps_taken * 0.7 
         # else:
         #     max_dist = math.hypot(eval_maze.width, eval_maze.height)
         #     if agent.min_dist_to_goal != float('inf') and max_dist > 0:
         #          proximity = 1.0 - (agent.min_dist_to_goal / max_dist)
         #          fitness += (base_reward / 2.0) * max(0.0, proximity)**2
         
-        #if agent.collided:
+        # if agent.collided:
         #    fitness *= 0.5
         # if agent.velocity < 0.1 and not agent.reached_goal: # Додамо перевірку, щоб не штрафувати, якщо вже біля цілі
         #     fitness *= 0.5

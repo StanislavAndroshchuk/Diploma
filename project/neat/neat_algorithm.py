@@ -292,84 +292,86 @@ class NeatAlgorithm:
         c2 = self.config['C2_DISJOINT']
         c3 = self.config['C3_WEIGHT']
 
-        # Використовуємо представників з попереднього покоління, якщо це не перше покоління
-        # або якщо species_representatives_prev_gen не порожній (наприклад, після завантаження)
-        representatives_to_use = {}
+        # Зберігаємо карту старих видів за ID для доступу до їх історії
+        old_species_map = {s.id: s for s in self.species}
+
+        species_to_compare_against = []
+        existing_species_for_repopulation = [] # Види, які продовжують існувати
+
         if self.generation > 0 and self.species_representatives_prev_gen:
-            # Перевіряємо, чи ID видів з попереднього покоління все ще актуальні
-            # (деякі види могли зникнути)
-            # Створюємо тимчасовий список видів, які існували
-            existing_species_for_repopulation = []
             for spec_id, rep_genome in self.species_representatives_prev_gen.items():
-                # Створюємо "пустий" вид лише для утримання представника
-                # Фактичні члени будуть додані нижче
-                temp_spec = Species(rep_genome.copy()) # Використовуємо копію представника
-                temp_spec.id = spec_id
-                temp_spec.representative = rep_genome # Встановлюємо збереженого представника
-                existing_species_for_repopulation.append(temp_spec)
+                # Створюємо новий екземпляр Species для поточного видоутворення
+                current_gen_species_instance = Species(rep_genome.copy()) # Використовуємо копію представника
+                current_gen_species_instance.id = spec_id # Встановлюємо правильний ID
+                # current_gen_species_instance.representative вже встановлений конструктором
+
+                # --- ОСЬ ТУТ ВАЖЛИВЕ ДОПОВНЕННЯ ---
+                # Переносимо історію зі старого об'єкта виду, якщо він існував
+                if spec_id in old_species_map:
+                    original_species_history = old_species_map[spec_id]
+                    current_gen_species_instance.generations_since_improvement = original_species_history.generations_since_improvement
+                    current_gen_species_instance.best_fitness_ever = original_species_history.best_fitness_ever
+                # ----------------------------------
+                
+                existing_species_for_repopulation.append(current_gen_species_instance)
+            
             species_to_compare_against = existing_species_for_repopulation
             print(f"Speciation: Using {len(species_to_compare_against)} representatives from previous generation.")
         else:
-            # Для першого покоління або якщо немає збережених представників,
-            # використовуємо поточні види (які на цьому етапі будуть порожніми,
-            # або матимуть одного члена, якщо це самий початок).
-            # Або, для самого першого видоутворення, ми можемо не мати self.species.
-            # У цьому випадку, перший геном створює перший вид.
-            species_to_compare_against = [] # Будуть створюватися нові види
-            if not self.species and self.population: # Дуже перший запуск
+            # Для першого покоління або якщо немає збережених представників
+            species_to_compare_against = []
+            if not self.species and self.population:
                  print("Speciation: Initial speciation, no previous representatives.")
-            elif self.species: # Якщо види є, але немає попередніх представників (напр. після завантаження без них)
-                 # Очистимо їх членів і використаємо поточних представників (якщо вони є)
-                 for spec in self.species:
-                     if spec.representative: # Якщо представник був відновлений
-                         species_to_compare_against.append(spec)
+            elif self.species: # Після завантаження, наприклад
+                 for spec in self.species: # self.species тут - це завантажені види
+                     if spec.representative:
+                         # Важливо: очищаємо членів перед повторним наповненням,
+                         # але зберігаємо історію (generations_since_improvement, best_fitness_ever)
                          spec.clear_members() # Очищаємо для нового наповнення
-                     else: # Вид без представника не може використовуватись для порівняння
+                         species_to_compare_against.append(spec)
+                     else:
                          print(f"Warning: Species {spec.id} has no representative during speciation, will likely be removed.")
                  print(f"Speciation: Using {len(species_to_compare_against)} current representatives (e.g., after load).")
 
 
         newly_created_species_this_gen = []
-        final_species_list = list(species_to_compare_against) # Починаємо з видів, що мають представників
+        # Починаємо з видів, що мають представників і потенційно історію
+        final_species_list = list(species_to_compare_against) 
 
         for genome in self.population:
             if not genome: continue
 
-            assigned_to_existing = False
-            for spec in species_to_compare_against: # Порівнюємо зі "старими" представниками
-                if not spec.representative: continue # Про всяк випадок
-                distance = genome.distance(spec.representative, c1, c2, c3)
+            assigned_to_existing_or_repopulating = False
+            # Спочатку порівнюємо з видами, які продовжують існувати (з existing_species_for_repopulation)
+            # або з тими, що були завантажені (з species_to_compare_against на старті)
+            for spec_to_check in species_to_compare_against: # Це вже "нові" екземпляри з потенційно перенесеною історією
+                if not spec_to_check.representative: continue
+                distance = genome.distance(spec_to_check.representative, c1, c2, c3)
                 if distance < threshold:
-                    spec.add_member(genome) # add_member оновить genome.species_id
-                    assigned_to_existing = True
+                    spec_to_check.add_member(genome)
+                    assigned_to_existing_or_repopulating = True
                     break
             
-            if not assigned_to_existing:
-                # Якщо не підійшов до жодного існуючого, перевіряємо щойно створені в цьому поколінні
+            if not assigned_to_existing_or_repopulating:
                 assigned_to_newly_created = False
                 for new_spec in newly_created_species_this_gen:
-                    # Представник new_spec - це перший геном, що його утворив
                     distance = genome.distance(new_spec.representative, c1, c2, c3)
                     if distance < threshold:
                         new_spec.add_member(genome)
                         assigned_to_newly_created = True
                         break
                 if not assigned_to_newly_created:
-                    # Створюємо абсолютно новий вид
-                    brand_new_species = Species(genome) # genome стає представником
+                    brand_new_species = Species(genome) # genome стає представником, історія починається з 0 - ЦЕ КОРЕКТНО
                     newly_created_species_this_gen.append(brand_new_species)
-                    final_species_list.append(brand_new_species)
+                    final_species_list.append(brand_new_species) # Додаємо до загального списку
 
-
-        # Оновлюємо self.species: видаляємо порожні види з existing_species_for_repopulation
-        # та додаємо newly_created_species_this_gen (вони не можуть бути порожніми)
+        # Оновлюємо self.species: видаляємо види, які не отримали членів,
+        # та додаємо новостворені (вони завжди матимуть хоча б одного члена).
         self.species = [s for s in final_species_list if s.members]
 
-        # Після того, як всі геноми поточного покоління розподілені,
-        # оновлюємо представників КОЖНОГО виду для використання в НАСТУПНОМУ поколінні.
-        # Це робиться ВИПАДКОВИМ вибором з поточних членів.
+        # Оновлюємо представників для НАСТУПНОГО покоління (випадковий вибір з поточних членів)
         for spec in self.species:
-            spec.update_representative() # Тепер це правильно, бо це для НАСТУПНОГО порівняння
+            spec.update_representative()
 
     def _calculate_adjusted_fitness(self):
         for spec in self.species:
